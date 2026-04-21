@@ -325,9 +325,12 @@ class ChatController extends Controller
         // Broadcast event if it exists in core
         try {
             if (class_exists('\App\Events\CartUpdated')) {
-                event(new \App\Events\CartUpdated($cookie, 'bulk_added', ['count' => count($results)], $customerId));
+                $eventCookieId = $customerId ? null : $cookieId;
+                event(new \App\Events\CartUpdated($eventCookieId, 'bulk_added', ['count' => count($results)], $customerId));
             }
-        } catch (\Exception $e) {}
+        } catch (\Exception $e) {
+            \Log::error('AI Bulk Add Cart event failed', ['error' => $e->getMessage()]);
+        }
 
         return response()->json([
             'success' => true,

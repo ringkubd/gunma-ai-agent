@@ -32,6 +32,8 @@ class ToolExecutor
             'get_customer_info'    => $this->getCustomerInfo(),
             'add_item_to_cart'     => $this->addItemToCart($args),
             'get_featured_recipe'  => $this->getFeaturedRecipe(),
+            'create_support_ticket'=> $this->createSupportTicket($args),
+            'check_delivery_time'  => $this->checkDeliveryTime($args),
             default                => ['error' => "Unknown tool: {$functionName}"],
         };
     }
@@ -185,6 +187,57 @@ class ToolExecutor
         return $results[array_rand($results)]['payload'];
     }
 
+    private function createSupportTicket(array $args): array
+    {
+        $messageModel = config('gunma-agent.models.message', \App\Models\Message::class);
+        $customer = auth('customer')->user();
+
+        if (!class_exists($messageModel)) {
+            return ['error' => 'Support system is currently unavailable.'];
+        }
+
+        $ticket = $messageModel::create([
+            'name'    => $customer->name ?? $args['name'] ?? 'Guest User',
+            'email'   => $customer->email ?? $args['email'] ?? null,
+            'phone'   => $customer->phone ?? $args['phone'] ?? null,
+            'message' => "[AI TICKET] " . ($args['issue_type'] ?? 'General') . ": " . $args['message'],
+        ]);
+
+        return [
+            'status'  => 'success',
+            'message' => 'Your support ticket has been raised. Our team will contact you soon.',
+            'ticket_id' => $ticket->id
+        ];
+    }
+
+    private function checkDeliveryTime(array $args): array
+    {
+        $postCode = $args['post_code'] ?? null;
+        if (!$postCode) {
+            return ['error' => 'Please provide a post code.'];
+        }
+
+        $postCodeModel = config('gunma-agent.models.post_code', \App\Models\PostCode::class);
+        if (!class_exists($postCodeModel)) {
+            return ['error' => 'Delivery check is currently unavailable.'];
+        }
+
+        $data = $postCodeModel::with(['schedules', 'city', 'state'])->where('code', $postCode)->first();
+
+        if (!$data) {
+            return ['error' => 'Post code not found. Please double check the code.'];
+        }
+
+        return [
+            'status' => 'success',
+            'post_code' => $data->code,
+            'city' => $data->city->name ?? null,
+            'state' => $data->state->name ?? null,
+            'delay_days' => $data->after_delay,
+            'schedules' => $data->schedules->pluck('schedule')->toArray(),
+        ];
+    }
+
     /**
      * Return the OpenAI tool definitions for the system prompt.
      */
@@ -315,6 +368,50 @@ class ToolExecutor
                             ],
                         ],
                         'required' => ['product_id'],
+                    ],
+                ],
+            ],
+            [
+                'type'     => 'function',
+                'function' => [
+                    'name'        => 'create_support_ticket',
+                    'description' => 'Automatically create a support ticket for payment issues, complaints, or if the user wants to leave a message.',
+                    'parameters'  => [
+                        'type'       => 'object',
+                        'properties' => [
+                            'message' => [
+                                'type'        => 'string',
+                                'description' => 'Summary of the user\'s issue or message.',
+                            ],
+                            'issue_type' => [
+                                'type'        => 'string',
+                                'enum'        => ['payment', 'delivery', 'quality', 'feedback', 'other'],
+                                'description' => 'The category of the issue.',
+                            ],
+                            'name'  => ['type' => 'string', 'description' => 'User name if guest.'],
+                            'email' => ['type' => 'string', 'description' => 'User email if guest.'],
+                        ],
+                        'required' => ['message', 'issue_type'],
+                    ],
+                ],
+            ],
+                    ],
+                ],
+            ],
+            [
+                'type'     => 'function',
+                'function' => [
+                    'name'        => 'check_delivery_time',
+                    'description' => 'Check the estimated delivery time and available schedules for a specific post code.',
+                    'parameters'  => [
+                        'type'       => 'object',
+                        'properties' => [
+                            'post_code' => [
+                                'type'        => 'string',
+                                'description' => 'The user\'s post code (e.g., 270-0021).',
+                            ],
+                        ],
+                        'required' => ['post_code'],
                     ],
                 ],
             ],

@@ -91,6 +91,66 @@ class QdrantService
     }
 
     /**
+     * Index or Update a product for real-time stock/price accuracy.
+     */
+    public function upsertProduct(array $product): void
+    {
+        $text = ($product['name'] ?? '') . ' ' . ($product['description'] ?? '');
+        $vector = $this->embeddingService->openaiEmbed($text);
+
+        $this->bulkUpsert($this->collections['products'], [
+            [
+                'id'      => $this->generateUuid(md5("prod_" . $product['id'])),
+                'vector'  => $vector,
+                'payload' => array_merge($product, ['last_updated' => now()->toIso8601String()]),
+            ]
+        ]);
+    }
+
+    /**
+     * Index a purchase event to build a semantic profile for the customer.
+     */
+    public function indexOrderHistory(int $customerId, array $item): void
+    {
+        $text = "Customer bought: " . ($item['name'] ?? '');
+        $vector = $this->embeddingService->openaiEmbed($text);
+
+        $this->bulkUpsert($this->collections['history'], [
+            [
+                'id'      => $this->generateUuid(md5("order_" . ($item['id'] ?? microtime()))),
+                'vector'  => $vector,
+                'payload' => [
+                    'customer_id' => $customerId,
+                    'product_id'  => $item['product_id'] ?? null,
+                    'name'        => $item['name'] ?? '',
+                    'timestamp'   => now()->toIso8601String(),
+                ]
+            ]
+        ]);
+    }
+
+    /**
+     * Search for products similar to what a customer has bought before.
+     */
+    public function searchPersonalizedProducts(int $customerId, int $limit = 5): array
+    {
+        // 1. Get recent purchase vectors for this customer
+        $history = $this->getCollectionPoints($this->collections['history'], [
+            'must' => [['key' => 'customer_id', 'match' => ['value' => $customerId]]]
+        ], 3);
+
+        if (empty($history)) {
+            return $this->searchProducts("popular halal items", $limit); // Fallback to trending
+        }
+
+        // 2. Average the vectors (simple centroid) or just take the latest
+        $latestVector = $history[0]['vector'];
+
+        // 3. Search products collection using that vector
+        return $this->vectorSearch($this->collections['products'], $latestVector, $limit);
+    }
+
+    /**
      * Generic bulk upsert for Scout or other integrations.
      */
     public function bulkUpsert(string $collection, array $points): void
@@ -200,6 +260,7 @@ class QdrantService
                     'vector'       => $vector,
                     'limit'        => $limit,
                     'with_payload' => true,
+                    'with_vector'  => true, // Needed for centroid calculation if we scale
                 ]);
 
             if (! $response->ok()) {
@@ -214,6 +275,23 @@ class QdrantService
             Log::error("[QdrantService] Search exception on {$collection}", [
                 'message' => $e->getMessage(),
             ]);
+            return [];
+        }
+    }
+
+    private function getCollectionPoints(string $collection, array $filter, int $limit): array
+    {
+        try {
+            $response = Http::timeout(15)
+                ->post("{$this->qdrantUrl}/collections/{$collection}/points/scroll", [
+                    'filter'       => $filter,
+                    'limit'        => $limit,
+                    'with_payload' => true,
+                    'with_vector'  => true,
+                ]);
+
+            return $response->json('result.points') ?? [];
+        } catch (\Exception $e) {
             return [];
         }
     }

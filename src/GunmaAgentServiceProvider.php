@@ -80,6 +80,7 @@ class GunmaAgentServiceProvider extends ServiceProvider
             $this->commands([
                 \Anwar\GunmaAgent\Commands\IndexCommand::class,
                 \Anwar\GunmaAgent\Commands\SetupCollectionsCommand::class,
+                \Anwar\GunmaAgent\Commands\SyncDataToQdrantCommand::class,
                 \Anwar\GunmaAgent\Commands\InstallCommand::class,
             ]);
         }
@@ -96,6 +97,23 @@ class GunmaAgentServiceProvider extends ServiceProvider
 
         // Register Broadcasting Channels
         $this->registerBroadcastingChannels();
+
+        // Register Observers for Real-time Sync
+        $this->registerObservers();
+    }
+
+    private function registerObservers(): void
+    {
+        $productModel = config('gunma-agent.models.product');
+        $orderModel   = config('gunma-agent.models.order');
+
+        if (class_exists($productModel)) {
+            $productModel::observe(\Anwar\GunmaAgent\Observers\ProductObserver::class);
+        }
+
+        if (class_exists($orderModel)) {
+            $orderModel::observe(\Anwar\GunmaAgent\Observers\OrderObserver::class);
+        }
     }
 
     private function registerBroadcastingChannels(): void

@@ -31,6 +31,7 @@ return [
         'kb'       => env('GUNMA_COLLECTION_KB', 'gunmahal_kb'),
         'memories' => env('GUNMA_COLLECTION_MEMORIES', 'chat_memories'),
         'cache'    => env('GUNMA_COLLECTION_CACHE', 'chat_cache'),
+        'history'  => env('GUNMA_COLLECTION_HISTORY', 'purchase_history'),
     ],
 
     /*

@@ -34,6 +34,8 @@ class ToolExecutor
             'get_featured_recipe'  => $this->getFeaturedRecipe(),
             'create_support_ticket'=> $this->createSupportTicket($args),
             'check_delivery_time'  => $this->checkDeliveryTime($args),
+            'get_trending_products'=> $this->getTrendingProducts($args),
+            'get_personalized_recommendations' => $this->getPersonalizedRecommendations($args),
             default                => ['error' => "Unknown tool: {$functionName}"],
         };
     }
@@ -238,6 +240,45 @@ class ToolExecutor
         ];
     }
 
+    private function getTrendingProducts(array $args): array
+    {
+        $productModel = config('gunma-agent.models.product');
+        if (!class_exists($productModel)) return [];
+
+        $products = $productModel::where('status', 'Active')
+            ->where('is_online_available', 1)
+            ->with(['latestStock', 'images'])
+            ->latest()
+            ->limit($args['limit'] ?? 5)
+            ->get();
+
+        return $products->map(fn($p) => [
+            'id'        => $p->id,
+            'title'     => $p->title,
+            'price'     => (float) ($p->latestStock?->online_price ?? 0),
+            'image_url' => $p->images->first()?->image_path,
+            'slug'      => $p->slug
+        ])->toArray();
+    }
+
+    private function getPersonalizedRecommendations(array $args): array
+    {
+        $customer = auth('customer')->user();
+        if (!$customer) {
+            return $this->getTrendingProducts($args);
+        }
+
+        $results = $this->qdrantService->searchPersonalizedProducts($customer->id, $args['limit'] ?? 5);
+        
+        return array_map(fn($hit) => [
+            'id'        => $hit['payload']['id'] ?? null,
+            'title'     => $hit['payload']['title'] ?? $hit['payload']['name'] ?? 'Unknown',
+            'price'     => $hit['payload']['price'] ?? null,
+            'image_url' => $hit['payload']['image_url'] ?? null,
+            'slug'      => $hit['payload']['slug'] ?? null,
+        ], $results);
+    }
+
     /**
      * Return the OpenAI tool definitions for the system prompt.
      */
@@ -411,8 +452,32 @@ class ToolExecutor
                         'required' => ['post_code'],
                     ],
                 ],
+            [
+                'type'     => 'function',
+                'function' => [
+                    'name'        => 'get_trending_products',
+                    'description' => 'Get the most popular and latest products for guest or new users.',
+                    'parameters'  => [
+                        'type'       => 'object',
+                        'properties' => [
+                            'limit' => ['type' => 'integer', 'default' => 5],
+                        ],
+                    ],
+                ],
+            ],
+            [
+                'type'     => 'function',
+                'function' => [
+                    'name'        => 'get_personalized_recommendations',
+                    'description' => 'Get personalized product recommendations based on the customer\'s specific purchase history.',
+                    'parameters'  => [
+                        'type'       => 'object',
+                        'properties' => [
+                            'limit' => ['type' => 'integer', 'default' => 5],
+                        ],
+                    ],
+                ],
             ],
         ];
-
     }
 }

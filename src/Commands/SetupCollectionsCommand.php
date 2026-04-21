@@ -21,7 +21,9 @@ class SetupCollectionsCommand extends Command
             $this->info("Creating collection: {$name}...");
             
             // Determine vector size
-            $size = ($key === 'products' || $key === 'cache') ? 1536 : 768;
+            // OpenAI (products, cache, history) = 1536
+            // Ollama (recipes, kb, memories) = 768
+            $size = in_array($key, ['products', 'cache', 'history']) ? 1536 : 768;
 
             $response = Http::put("{$url}/collections/{$name}", [
                 'vectors' => [

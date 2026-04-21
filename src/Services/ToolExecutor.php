@@ -395,9 +395,6 @@ class ToolExecutor
                     ],
                 ],
             ],
-                    ],
-                ],
-            ],
             [
                 'type'     => 'function',
                 'function' => [
@@ -416,5 +413,6 @@ class ToolExecutor
                 ],
             ],
         ];
+
     }
 }

@@ -452,6 +452,7 @@ class ToolExecutor
                         'required' => ['post_code'],
                     ],
                 ],
+            ],
             [
                 'type'     => 'function',
                 'function' => [

@@ -45,6 +45,9 @@ class EmailWebhookController extends Controller
                 ['status' => 'active', 'is_ai_enabled' => true, 'customer_name' => $rawSender]
             );
 
+            // Ensure AI is active
+            $session->update(['is_ai_enabled' => true]);
+
             Log::info('[EmailSupport] Session ready: ' . $session->id);
 
             // 2. Dispatch background job for AI processing

@@ -516,11 +516,6 @@ PROMPT;
         // Broadcast to user and admin dashboard
         event(new \Anwar\GunmaAgent\Events\MessageBroadcasted($message));
 
-        if ($session->channel === 'email') {
-            \Anwar\GunmaAgent\Jobs\SendEmailResponseJob::dispatch($message->id);
-            \Illuminate\Support\Facades\Log::info('[AgentOrchestrator] Email response job dispatched for ' . $session->visitor_id);
-        }
-
         // Cache in Redis for fast context building
         $this->cacheMessageInRedis($session->id, 'assistant', $assistantMessage);
     }

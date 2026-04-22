@@ -50,10 +50,10 @@ class EmailWebhookController extends Controller
 
             Log::info('[EmailSupport] Session ready: ' . $session->id);
 
-            // 2. Dispatch SYNC for testing (Running immediately in this process)
-            \Anwar\GunmaAgent\Jobs\ProcessIncomingEmail::dispatchSync($session->id, $body);
+            // 2. Dispatch background job for AI processing
+            \Anwar\GunmaAgent\Jobs\ProcessIncomingEmail::dispatch($session->id, $body);
 
-            Log::info('[EmailSupport] AI Processing completed synchronously for session ID ' . $session->id);
+            Log::info('[EmailSupport] AI Processing Job dispatched for session ID ' . $session->id);
             
             return response()->json(['status' => 'success', 'session_id' => $session->id]);
         } catch (\Exception $e) {

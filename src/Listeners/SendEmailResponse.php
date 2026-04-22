@@ -35,8 +35,11 @@ class SendEmailResponse implements ShouldQueue
                 
                 \Illuminate\Support\Facades\Log::info('[EmailSupport] Attempting to send email to: ' . $customerEmail);
 
-                Mail::send([], [], function ($mail) use ($customerEmail, $htmlContent) {
+                $fromEmail = config('mail.from.address', 'support@gunmahalalfood.com');
+
+                Mail::send([], [], function ($mail) use ($customerEmail, $htmlContent, $fromEmail) {
                     $mail->to($customerEmail)
+                        ->from($fromEmail, 'Gunma Halal Food Support')
                         ->subject('Re: Support Request - Gunma Halal Food')
                         ->html($htmlContent);
                 });

@@ -17,24 +17,29 @@ class ProcessIncomingEmail implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public function __construct(
-        public ChatSession $session,
+        public int|string $sessionId,
         public string $messageBody
     ) {}
 
     public function handle(AgentOrchestrator $orchestrator): void
     {
         try {
-            \Illuminate\Support\Facades\Log::info('[EmailJob] Starting AI chat for session: ' . $this->session->id);
+            $session = ChatSession::find($this->sessionId);
+            
+            if (!$session) {
+                \Illuminate\Support\Facades\Log::error('[EmailJob] Session not found: ' . $this->sessionId);
+                return;
+            }
+
+            \Illuminate\Support\Facades\Log::info('[EmailJob] Starting AI chat for session: ' . $session->id);
             
             // AI processes the email and generates a response
-            $orchestrator->chat($this->session, $this->messageBody);
+            $orchestrator->chat($session, $this->messageBody);
             
-            \Illuminate\Support\Facades\Log::info('[EmailJob] AI chat completed for session: ' . $this->session->id);
+            \Illuminate\Support\Facades\Log::info('[EmailJob] AI chat completed for session: ' . $session->id);
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error('[EmailJob] Job failed: ' . $e->getMessage(), [
-                'trace' => $e->getTraceAsString()
-            ]);
-            throw $e; // Re-throw to let queue handle retries
+            \Illuminate\Support\Facades\Log::error('[EmailJob] Job failed: ' . $e->getMessage());
+            throw $e;
         }
     }
 }

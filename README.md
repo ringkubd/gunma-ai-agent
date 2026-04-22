@@ -1,49 +1,34 @@
-# Gunma AI Agent (Laravel Core)
+# Gunma AI Agent (Laravel Package)
 
-The core brain of the Gunma Halal Food AI ecosystem. This package handles natural language processing, vector search (Qdrant), tool execution (Order/Cart/Customer), and real-time monitoring.
+Modern, tool-calling AI agent backend for Gunma Halal Food. Orchestrates OpenAI, Qdrant, and real-time support channels.
 
-## Features
-- **RAG & Vector Search**: Deep integration with Qdrant for products, recipes, and knowledge base.
-- **Smart Tools**: Real-time order status, customer profile lookup, and direct "Add to Cart" functionality.
-- **Human Takeover**: Stop AI responses and respond manually from a dashboard.
-- **Real-time Streaming**: SSE (Server-Sent Events) for low-latency AI responses.
-- **Scout Support**: Custom Qdrant engine for Laravel Scout.
+## Core Features
+- **Piku Orchestrator**: Humanoid AI agent with tool-calling capabilities.
+- **Omnichannel Support**: Seamlessly handles Web Chat, Email (IMAP/Webhook), and Support Tickets.
+- **Smart Order Logic**: Intelligent order status reasoning and cancellation prevention for shipped items.
+- **Vector Search (Qdrant)**: High-speed semantic search for products and knowledge base.
+- **Support Tickets**: Dedicated `support_tickets` table for formal complaints and claims.
+- **Vision Support**: Analyzes customer-uploaded photos for damage claims.
 
 ## Installation
-
-1. Require the package (if using local path):
-```json
-"repositories": [
-    {
-        "type": "path",
-        "url": "./packages/gunma-ai-agent"
-    }
-],
-"require": {
-    "anwar/gunma-ai-agent": "dev-main"
-}
-```
-
-2. Run the install command:
 ```bash
-php artisan gunma:install
+composer require anwar/gunma-ai-agent
 ```
 
-3. Run migrations:
+## Setup
+1. Publish migrations and config:
+```bash
+php artisan vendor:publish --provider="Anwar\GunmaAgent\GunmaAgentServiceProvider"
+```
+2. Run migrations:
 ```bash
 php artisan migrate
 ```
 
-4. Configure your `.env`:
-```env
-GUNMA_OPENAI_API_KEY=sk-...
-GUNMA_QDRANT_URL=http://localhost:6333
-GUNMA_WEBSITE_URL=https://your-frontend.com
-```
+## Architecture
+- **ToolExecutor**: The brain that connects AI to your Laravel database and services.
+- **AgentOrchestrator**: Manages the message loop, context window, and streaming.
+- **EmailWebhookController**: Handles incoming support emails.
 
-## Commands
-- `php artisan gunma:index Product`: Deep-index products into Qdrant.
-- `php artisan gunma:setup-collections`: Initialize Qdrant collections.
-
-## Admin Dashboard
-Access the monitor API at `/api/admin/chat/sessions`. You can configure the middleware (e.g., `auth:admin`) in `config/gunma-agent.php`.
+## License
+MIT © Anwar

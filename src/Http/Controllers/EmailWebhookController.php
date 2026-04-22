@@ -38,10 +38,19 @@ class EmailWebhookController extends Controller
 
         Log::info('[EmailSupport] Processing email from ' . $sender . ' with subject: ' . $subject);
 
-        // Ignore internal emails from gunmahalalfood.com
-        if (str_ends_with(strtolower($sender), '@gunmahalalfood.com')) {
-            Log::info('[EmailSupport] Ignoring internal email: ' . $sender);
-            return response()->json(['status' => 'ignored', 'message' => 'Internal email']);
+        // Ignore internal or restricted domains
+        $ignoredDomains = [
+            'gunmahalalfood.com',
+            'ibadah.info',
+            'ibadahwholesale.com',
+            'ibadahfoodpalace.com',
+            'checktob.com'
+        ];
+
+        $senderDomain = substr(strrchr($sender, "@"), 1);
+        if (in_array(strtolower($senderDomain), $ignoredDomains)) {
+            Log::info('[EmailSupport] Ignoring restricted domain email: ' . $sender);
+            return response()->json(['status' => 'ignored', 'message' => 'Restricted domain']);
         }
 
         try {

@@ -506,6 +506,8 @@ PROMPT;
             'tokens_used' => $tokensUsed,
         ]);
 
+        \Illuminate\Support\Facades\Log::info('[AgentOrchestrator] Broadcasting AI response message: ' . $message->id);
+
         // Broadcast to user and admin dashboard
         event(new \Anwar\GunmaAgent\Events\MessageBroadcasted($message));
 

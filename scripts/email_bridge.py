@@ -51,6 +51,13 @@ def process_emails():
             # Decode Sender
             sender = msg.get("From")
             
+            # --- LOOP HOLE FIX: Skip System Emails ---
+            system_emails = ['MAILER-DAEMON', 'postmaster', 'noreply', 'no-reply', 'mailer-daemon']
+            if any(sys_email in sender.lower() for sys_email in system_emails):
+                print(f"[!] Skipping system email from: {sender}")
+                mail.store(num, '+FLAGS', '\\Seen') # Mark as seen anyway
+                continue
+
             # Extract plain text body
             body = get_body(msg)
 

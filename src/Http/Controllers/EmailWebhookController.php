@@ -36,17 +36,26 @@ class EmailWebhookController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Missing data'], 400);
         }
 
-        Log::info('[EmailSupport] New email received from ' . $sender);
+        Log::info('[EmailSupport] Processing email from ' . $sender . ' with subject: ' . $subject);
 
-        // 1. Find or create session for this email
-        $session = ChatSession::firstOrCreate(
-            ['visitor_id' => $sender, 'channel' => 'email'],
-            ['status' => 'active', 'is_ai_enabled' => true, 'customer_name' => $rawSender]
-        );
+        try {
+            // 1. Find or create session for this email
+            $session = ChatSession::firstOrCreate(
+                ['visitor_id' => $sender, 'channel' => 'email'],
+                ['status' => 'active', 'is_ai_enabled' => true, 'customer_name' => $rawSender]
+            );
 
-        // 2. Dispatch background job for AI processing
-        \Anwar\GunmaAgent\Jobs\ProcessIncomingEmail::dispatch($session, $body);
+            Log::info('[EmailSupport] Session ready: ' . $session->id);
 
-        return response()->json(['status' => 'success']);
+            // 2. Dispatch background job for AI processing
+            \Anwar\GunmaAgent\Jobs\ProcessIncomingEmail::dispatch($session, $body);
+
+            Log::info('[EmailSupport] AI Processing Job dispatched for session ' . $session->id);
+            
+            return response()->json(['status' => 'success', 'session_id' => $session->id]);
+        } catch (\Exception $e) {
+            Log::error('[EmailSupport] Error processing email webhook: ' . $e->getMessage());
+            return response()->json(['status' => 'error', 'message' => 'Internal server error'], 500);
+        }
     }
 }

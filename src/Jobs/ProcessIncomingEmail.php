@@ -16,9 +16,6 @@ class ProcessIncomingEmail implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $connection = 'database'; // Force database if that's what you're using
-    public $queue = 'default';
-
     public function __construct(
         public int|string $sessionId,
         public string $messageBody

@@ -46,5 +46,5 @@ Route::prefix($adminPrefix)
     });
 
 // Email Webhook (Incoming Support Emails)
-Route::post('chat/webhook/email', [\Anwar\GunmaAgent\Http\Controllers\EmailWebhookController::class, 'handle'])
+Route::prefix($prefix)->post('webhook/email', [\Anwar\GunmaAgent\Http\Controllers\EmailWebhookController::class, 'handle'])
     ->middleware(\Illuminate\Http\Middleware\HandleCors::class);

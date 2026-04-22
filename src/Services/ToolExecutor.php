@@ -201,26 +201,46 @@ class ToolExecutor
 
     private function createSupportTicket(array $args): array
     {
-        $messageModel = config('gunma-agent.models.message', \App\Models\Message::class);
         $customer = auth('customer')->user();
-
-        if (!class_exists($messageModel)) {
-            return ['error' => 'Support system is currently unavailable.'];
+        
+        // --- SMART CANCELLATION CHECK ---
+        if (($args['issue_type'] ?? '') === 'cancellation' && !empty($args['order_id'])) {
+            $orderModel = config('gunma-agent.models.order', \App\Models\Order::class);
+            if (class_exists($orderModel)) {
+                $order = $orderModel::find($args['order_id']);
+                if ($order) {
+                    $status = strtolower((string)$order->status);
+                    $blockedStatuses = ['delivered', 'shipped', 'on the way', 'completed', 'on-the-way'];
+                    
+                    if (in_array($status, $blockedStatuses)) {
+                        return [
+                            'status' => 'error',
+                            'message' => "I'm sorry, but this order is already '{$order->status}'. Once an order is moving or delivered, we cannot process a cancellation request. You can however raise a return claim once you receive it."
+                        ];
+                    }
+                }
+            }
         }
 
-        $ticket = $messageModel::create([
-            'name'    => $customer->name ?? $args['name'] ?? 'Guest User',
-            'email'   => $customer->email ?? $args['email'] ?? null,
-            'phone'   => $customer->phone ?? $args['phone'] ?? null,
-            'message' => "[AI TICKET] " . ($args['issue_type'] ?? 'General') . " | Order: " . ($args['order_id'] ?? 'N/A') . "\nDetails: " . ($args['product_details'] ?? 'N/A') . "\nSummary: " . $args['message'],
+        // Create ticket in the new dedicated table
+        $ticket = \Anwar\GunmaAgent\Models\SupportTicket::create([
+            'name'        => $customer->name ?? $args['name'] ?? 'Guest User',
+            'email'       => $customer->email ?? $args['email'] ?? null,
+            'phone'       => $customer->phone ?? $args['phone'] ?? null,
+            'order_id'    => $args['order_id'] ?? null,
+            'issue_type'  => $args['issue_type'] ?? 'general',
+            'subject'     => ($args['issue_type'] ?? '') === 'cancellation' ? "Cancellation Request for Order #{$args['order_id']}" : "Support Request: " . ($args['issue_type'] ?? 'General'),
+            'message'     => $args['message'],
+            'status'      => 'pending',
+            'metadata'    => $args
         ]);
 
-        // Dispatch event for external integrations (e.g., Google Sheets, Email)
+        // Dispatch event for external integrations
         event(new \Anwar\GunmaAgent\Events\SupportTicketCreated($ticket, $args));
 
         return [
             'status'  => 'success',
-            'message' => 'Your support ticket has been raised. Our team will contact you soon.',
+            'message' => 'I have successfully raised a support ticket for you. Our team will review it and get back to you soon.',
             'ticket_id' => $ticket->id
         ];
     }
@@ -331,27 +351,27 @@ class ToolExecutor
 
     private function createOrderClaim(array $args): array
     {
-        $claimModel = config('gunma-agent.models.order_claim', \App\Models\OrderClaim::class);
         $customer = auth('customer')->user();
 
-        if (!class_exists($claimModel)) {
-            return ['error' => 'Order claim system is currently unavailable.'];
-        }
-
-        $claim = $claimModel::create([
+        $claim = \Anwar\GunmaAgent\Models\SupportTicket::create([
+            'session_id'  => request()->header('X-Chat-Session-Id'), // if we can pass it
             'customer_id' => $customer->id ?? null,
+            'name'        => $customer->name ?? 'Guest',
+            'email'       => $customer->email ?? null,
             'order_id'    => $args['order_id'],
-            'claim_type'  => $args['issue_type'],
-            'description' => $args['product_details'] . "\n" . $args['message'],
-            'status'      => 'Pending',
+            'issue_type'  => $args['issue_type'] ?? 'claim',
+            'subject'     => "Order Claim: " . ($args['issue_type'] ?? 'Issue') . " for Order #{$args['order_id']}",
+            'message'     => "Product Details: " . ($args['product_details'] ?? 'N/A') . "\nDescription: " . $args['message'],
+            'status'      => 'pending',
+            'metadata'    => $args,
         ]);
 
-        // Dispatch event for further processing (Google Sheets, Email, etc.)
+        // Dispatch event for further processing
         event(new \Anwar\GunmaAgent\Events\SupportTicketCreated($claim, $args));
 
         return [
             'status'  => 'success',
-            'message' => 'Your claim has been registered in our system. Claim ID: ' . $claim->id,
+            'message' => 'Your claim has been registered. Our team will review the details and get back to you soon. Claim ID: ' . $claim->id,
             'claim_id' => $claim->id
         ];
     }

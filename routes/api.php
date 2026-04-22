@@ -40,9 +40,13 @@ Route::prefix($adminPrefix)
     ->group(function () {
         Route::get('/stats', [ChatController::class, 'getStats']);
         Route::get('/sessions', [ChatController::class, 'listSessions']);
-        Route::get('/sessions/{id}', [ChatController::class, 'showSession']);
+        Route::get('/sessions/{id}', [ChatController::class, 'getSession']);
         Route::post('/sessions/{id}/toggle-ai', [ChatController::class, 'toggleAi']);
         Route::post('/sessions/{id}/messages', [ChatController::class, 'sendManualMessage']);
+        
+        // Support Tickets
+        Route::get('/tickets', [ChatController::class, 'listTickets']);
+        Route::post('/tickets/{id}/status', [ChatController::class, 'updateTicketStatus']);
     });
 
 // Email Webhook (Incoming Support Emails)

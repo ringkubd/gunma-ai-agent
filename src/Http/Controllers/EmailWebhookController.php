@@ -38,6 +38,12 @@ class EmailWebhookController extends Controller
 
         Log::info('[EmailSupport] Processing email from ' . $sender . ' with subject: ' . $subject);
 
+        // Ignore internal emails from gunmahalalfood.com
+        if (str_ends_with(strtolower($sender), '@gunmahalalfood.com')) {
+            Log::info('[EmailSupport] Ignoring internal email: ' . $sender);
+            return response()->json(['status' => 'ignored', 'message' => 'Internal email']);
+        }
+
         try {
             // 1. Find or create session for this email
             $session = ChatSession::firstOrCreate(

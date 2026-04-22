@@ -275,6 +275,36 @@ class ChatController extends Controller
     }
 
     /**
+     * List all support tickets.
+     */
+    public function listTickets(Request $request): JsonResponse
+    {
+        $status = $request->query('status');
+        $query = \Anwar\GunmaAgent\Models\SupportTicket::latest();
+
+        if ($status) {
+            $query->where('status', $status);
+        }
+
+        $tickets = $query->paginate(20);
+
+        return response()->json($tickets);
+    }
+
+    /**
+     * Update a ticket's status.
+     */
+    public function updateTicketStatus(Request $request, string $id): JsonResponse
+    {
+        $ticket = \Anwar\GunmaAgent\Models\SupportTicket::findOrFail($id);
+        $ticket->update([
+            'status' => $request->input('status'),
+        ]);
+
+        return response()->json(['status' => 'success', 'ticket' => $ticket]);
+    }
+
+    /**
      * Get basic analytics for the dashboard.
      */
     public function getStats(): JsonResponse
@@ -284,6 +314,7 @@ class ChatController extends Controller
             'active_sessions'  => ChatSession::active()->count(),
             'total_messages'   => ChatMessage::count(),
             'manual_sessions'  => ChatSession::where('is_ai_enabled', false)->count(),
+            'pending_tickets'  => \Anwar\GunmaAgent\Models\SupportTicket::where('status', 'pending')->count(),
         ]);
     }
 

@@ -100,6 +100,12 @@ class GunmaAgentServiceProvider extends ServiceProvider
 
         // Register Observers for Real-time Sync
         $this->registerObservers();
+
+        // Register Event Listeners
+        \Illuminate\Support\Facades\Event::listen(
+            \Anwar\GunmaAgent\Events\MessageBroadcasted::class,
+            \Anwar\GunmaAgent\Listeners\SendEmailResponse::class
+        );
     }
 
     private function registerObservers(): void

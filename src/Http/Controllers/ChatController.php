@@ -170,6 +170,28 @@ class ChatController extends Controller
         ]);
     }
 
+    /* ── POST /chat/upload — Upload a file (images for claims) ──── */
+
+    public function upload(Request $request): JsonResponse
+    {
+        $request->validate([
+            'file' => 'required|image|mimes:jpeg,png,jpg,gif|max:5120', // 5MB limit
+        ]);
+
+        if ($request->hasFile('file')) {
+            $file = $request->file('file');
+            $path = $file->store('chat_uploads', 'public');
+            $url = asset('storage/' . $path);
+
+            return response()->json([
+                'status' => 'success',
+                'url' => $url,
+            ]);
+        }
+
+        return response()->json(['error' => 'No file uploaded.'], 422);
+    }
+
     /* ── Private: SSE Helpers ──────────────────────────────────── */
 
     private function sseHeaders(): array

@@ -11,9 +11,9 @@ namespace Anwar\GunmaAgent\Services;
 class GreetingInterceptor
 {
     private const GREETINGS = [
-        'hi'               => 'Hi there! How can Gunma Halal Food help you today?',
-        'hello'            => 'Hello! Welcome to Gunma Halal Food. How can I assist you?',
-        'hey'              => 'Hey! Welcome to Gunma Halal Food. What can I do for you?',
+        'hi'               => 'Hello, this is Piku from Gunma Halal Food Customer Support. How may I assist you today?',
+        'hello'            => 'Hello, this is Piku from Gunma Halal Food Customer Support. How may I assist you today?',
+        'hey'              => 'Hello, this is Piku from Gunma Halal Food Customer Support. How may I assist you today?',
         'thanks'           => "You're very welcome! Let me know if you need anything else.",
         'thank you'        => "You're very welcome! Happy to help.",
         'bye'              => 'Goodbye! Have a great day and come back soon!',

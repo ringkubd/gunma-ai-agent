@@ -21,6 +21,7 @@ $corsOrigins = config('gunma-agent.cors_origins', ['*']);
 Route::prefix($prefix)
     ->middleware(array_merge($middleware, [\Illuminate\Http\Middleware\HandleCors::class]))
     ->group(function () {
+        Route::post('/upload', [ChatController::class, 'upload']);
         Route::post('/sessions', [ChatController::class, 'createSession']);
         Route::get('/sessions/{id}', [ChatController::class, 'showSession']);
         Route::post('/sessions/{id}/end', [ChatController::class, 'endSession']);
@@ -43,3 +44,7 @@ Route::prefix($adminPrefix)
         Route::post('/sessions/{id}/toggle-ai', [ChatController::class, 'toggleAi']);
         Route::post('/sessions/{id}/messages', [ChatController::class, 'sendManualMessage']);
     });
+
+// Email Webhook (Incoming Support Emails)
+Route::post('api/chat/webhook/email', [\Anwar\GunmaAgent\Http\Controllers\EmailWebhookController::class, 'handle'])
+    ->middleware(\Illuminate\Http\Middleware\HandleCors::class);

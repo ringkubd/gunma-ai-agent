@@ -35,7 +35,11 @@ class ToolExecutor
             'create_support_ticket'=> $this->createSupportTicket($args),
             'check_delivery_time'  => $this->checkDeliveryTime($args),
             'get_trending_products'=> $this->getTrendingProducts($args),
+            'get_cart_contents'    => $this->getCartContents(),
+            'create_order_claim'   => $this->createOrderClaim($args),
             'get_personalized_recommendations' => $this->getPersonalizedRecommendations($args),
+            'get_active_promotions'=> $this->getActivePromotions(),
+            'hand_off_to_human'    => $this->handOffToHuman($session ?? null),
             default                => ['error' => "Unknown tool: {$functionName}"],
         };
     }
@@ -121,9 +125,15 @@ class ToolExecutor
             'status' => 'success',
             'customer_name' => $customer->name,
             'email' => $customer->email,
-            'available_points' => $customer->available_point,
+            'available_points' => $customer->available_point, // from customers table
             'wallet_amount' => $customer->amount,
             'recent_orders' => $recentOrders,
+            'points_history' => $customer->pointHistories()->latest()->take(5)->get()->map(fn($p) => [
+                'points' => $p->point,
+                'type' => $p->type,
+                'description' => $p->description,
+                'date' => $p->created_at->format('Y-m-d')
+            ])->toArray(),
         ];
     }
 
@@ -202,8 +212,11 @@ class ToolExecutor
             'name'    => $customer->name ?? $args['name'] ?? 'Guest User',
             'email'   => $customer->email ?? $args['email'] ?? null,
             'phone'   => $customer->phone ?? $args['phone'] ?? null,
-            'message' => "[AI TICKET] " . ($args['issue_type'] ?? 'General') . ": " . $args['message'],
+            'message' => "[AI TICKET] " . ($args['issue_type'] ?? 'General') . " | Order: " . ($args['order_id'] ?? 'N/A') . "\nDetails: " . ($args['product_details'] ?? 'N/A') . "\nSummary: " . $args['message'],
         ]);
+
+        // Dispatch event for external integrations (e.g., Google Sheets, Email)
+        event(new \Anwar\GunmaAgent\Events\SupportTicketCreated($ticket, $args));
 
         return [
             'status'  => 'success',
@@ -259,6 +272,88 @@ class ToolExecutor
             'image_url' => $p->images->first()?->image_path,
             'slug'      => $p->slug
         ])->toArray();
+    }
+
+    private function getCartContents(): array
+    {
+        $customer = auth('customer')->user();
+        if (!$customer) {
+            return ['error' => 'User not logged in. Cannot fetch cart.'];
+        }
+
+        $cartModel = config('gunma-agent.models.cart', \App\Models\Cart::class);
+        if (!class_exists($cartModel)) {
+            return ['error' => 'Cart system unavailable.'];
+        }
+
+        $items = $cartModel::where('customer_id', $customer->id)
+            ->with('product')
+            ->get()
+            ->map(fn($item) => [
+                'product_id' => $item->product_id,
+                'name' => $item->product->title ?? 'Unknown Product',
+                'quantity' => $item->quantity,
+                'price' => $item->item_price,
+            ])->toArray();
+
+        return [
+            'status' => 'success',
+            'items' => $items,
+            'total_items' => count($items),
+        ];
+    }
+
+    private function getActivePromotions(): array
+    {
+        // In a real scenario, this would fetch from a 'promotions' or 'coupons' table
+        return [
+            'status' => 'success',
+            'promotions' => [
+                ['title' => 'First Order Discount', 'code' => 'WELCOME10', 'description' => '10% off on your first order.'],
+                ['title' => 'Free Shipping', 'code' => 'FREESHIP', 'description' => 'Free shipping on orders over ¥5000.'],
+                ['title' => 'Ramadan Special', 'code' => 'RAMADAN', 'description' => 'Buy 5kg Rice, get 1kg Lentil free!'],
+            ]
+        ];
+    }
+
+    private function handOffToHuman($session): array
+    {
+        if ($session) {
+            $session->update(['is_ai_enabled' => false]);
+            // Here you could also fire a notification event to Pusher for the admin
+        }
+
+        return [
+            'status' => 'success',
+            'message' => 'AI has been disabled. A human agent will take over this conversation shortly.'
+        ];
+    }
+
+    private function createOrderClaim(array $args): array
+    {
+        $claimModel = config('gunma-agent.models.order_claim', \App\Models\OrderClaim::class);
+        $customer = auth('customer')->user();
+
+        if (!class_exists($claimModel)) {
+            return ['error' => 'Order claim system is currently unavailable.'];
+        }
+
+        $claim = $claimModel::create([
+            'customer_id' => $customer->id ?? null,
+            'order_id'    => $args['order_id'],
+            'claim_type'  => $args['issue_type'],
+            'description' => $args['product_details'] . "\n" . $args['message'],
+            'status'      => 'Pending',
+        ]);
+
+        // Dispatch event for further processing (Google Sheets, Email, etc.)
+        event(new \Anwar\GunmaAgent\Events\SupportTicketCreated($claim, $args));
+
+        return [
+            'status'  => 'success',
+            'message' => 'Your claim has been registered in our system. Claim ID: ' . $claim->id,
+            'claim_id' => $claim->id
+        ];
     }
 
     private function getPersonalizedRecommendations(array $args): array
@@ -426,8 +521,16 @@ class ToolExecutor
                             ],
                             'issue_type' => [
                                 'type'        => 'string',
-                                'enum'        => ['payment', 'delivery', 'quality', 'feedback', 'other'],
+                                'enum'        => ['payment', 'delivery', 'quality', 'feedback', 'product_missing', 'product_damage', 'extra_item', 'other'],
                                 'description' => 'The category of the issue.',
+                            ],
+                            'order_id' => [
+                                'type'        => 'string',
+                                'description' => 'The ID of the order related to the issue.',
+                            ],
+                            'product_details' => [
+                                'type'        => 'string',
+                                'description' => 'Details of the specific product(s) involved (e.g., name, quantity).',
                             ],
                             'name'  => ['type' => 'string', 'description' => 'User name if guest.'],
                             'email' => ['type' => 'string', 'description' => 'User email if guest.'],
@@ -476,6 +579,59 @@ class ToolExecutor
                         'properties' => [
                             'limit' => ['type' => 'integer', 'default' => 5],
                         ],
+                    ],
+                ],
+            ],
+            [
+                'type'     => 'function',
+                'function' => [
+                    'name'        => 'get_cart_contents',
+                    'description' => 'Get the items currently in the user\'s shopping cart. Use this before suggesting products to avoid duplicates.',
+                    'parameters'  => [
+                        'type'       => 'object',
+                        'properties' => (object) [],
+                    ],
+                ],
+            ],
+            [
+                'type'     => 'function',
+                'function' => [
+                    'name'        => 'create_order_claim',
+                    'description' => 'Register a formal claim for missing, damaged, or extra products in an order.',
+                    'parameters'  => [
+                        'type'       => 'object',
+                        'properties' => [
+                            'order_id' => ['type' => 'string', 'description' => 'The order ID.'],
+                            'issue_type' => [
+                                'type' => 'string',
+                                'enum' => ['product_missing', 'product_damage', 'extra_item'],
+                            ],
+                            'product_details' => ['type' => 'string', 'description' => 'Name and quantity of products involved.'],
+                            'message' => ['type' => 'string', 'description' => 'Additional notes.'],
+                        ],
+                        'required' => ['order_id', 'issue_type', 'product_details', 'message'],
+                    ],
+                ],
+            ],
+            [
+                'type'     => 'function',
+                'function' => [
+                    'name'        => 'get_active_promotions',
+                    'description' => 'Check for current store-wide discounts, coupons, and special deals.',
+                    'parameters'  => [
+                        'type'       => 'object',
+                        'properties' => (object) [],
+                    ],
+                ],
+            ],
+            [
+                'type'     => 'function',
+                'function' => [
+                    'name'        => 'hand_off_to_human',
+                    'description' => 'Transfer the conversation to a human support agent if the issue is too complex or the user is angry.',
+                    'parameters'  => [
+                        'type'       => 'object',
+                        'properties' => (object) [],
                     ],
                 ],
             ],

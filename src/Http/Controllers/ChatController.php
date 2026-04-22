@@ -17,7 +17,11 @@ class ChatController extends Controller
 {
     public function __construct(
         private readonly AgentOrchestrator $agent,
-    ) {}
+    ) {
+        if (request()->hasHeader('Authorization')) {
+            auth()->shouldUse('customer');
+        }
+    }
 
     /* ── POST /chat/sessions — Create a new chat session ───────── */
 

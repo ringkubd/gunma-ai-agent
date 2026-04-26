@@ -232,7 +232,7 @@ class ChatController extends Controller
      */
     public function getSession(string $sessionId): JsonResponse
     {
-        $session = ChatSession::with(['messages' => fn($q) => $q->latest()->take(50)])
+        $session = ChatSession::with(['messages' => fn($q) => $q->oldest()->take(100)])
             ->findOrFail($sessionId);
 
         return response()->json($session);

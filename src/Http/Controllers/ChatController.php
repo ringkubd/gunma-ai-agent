@@ -395,4 +395,22 @@ class ChatController extends Controller
             'message' => 'Products added to cart successfully.'
         ]);
     }
+    /**
+     * Broadcast typing status.
+     */
+    public function typing(Request $request, string $sessionId): JsonResponse
+    {
+        $validated = $request->validate([
+            'role'      => 'required|string|in:user,assistant',
+            'is_typing' => 'required|boolean',
+        ]);
+
+        event(new \Anwar\GunmaAgent\Events\UserTyping(
+            $sessionId,
+            $validated['role'],
+            $validated['is_typing']
+        ));
+
+        return response()->json(['status' => 'success']);
+    }
 }

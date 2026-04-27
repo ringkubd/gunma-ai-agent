@@ -27,6 +27,7 @@ Route::prefix($prefix)
         Route::post('/sessions/{id}/end', [ChatController::class, 'endSession']);
         Route::post('/sessions/{id}/messages', [ChatController::class, 'sendMessage']);
         Route::post('/sessions/{id}/messages/sync', [ChatController::class, 'sendMessageSync']);
+        Route::post('/sessions/{id}/typing', [ChatController::class, 'typing']);
         Route::get('/sessions/{id}/messages', [ChatController::class, 'getMessages']);
         Route::post('/cart/bulk', [ChatController::class, 'bulkAddToCart']);
     });
@@ -43,6 +44,7 @@ Route::prefix($adminPrefix)
         Route::get('/sessions/{id}', [ChatController::class, 'getSession']);
         Route::post('/sessions/{id}/toggle-ai', [ChatController::class, 'toggleAi']);
         Route::post('/sessions/{id}/messages', [ChatController::class, 'sendManualMessage']);
+        Route::post('/sessions/{id}/typing', [ChatController::class, 'typing']);
         
         // Support Tickets
         Route::get('/tickets', [ChatController::class, 'listTickets']);

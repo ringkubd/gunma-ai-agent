@@ -10,25 +10,39 @@ Modern, tool-calling AI agent backend for Gunma Halal Food. Orchestrates OpenAI,
 - **Support Tickets**: Dedicated `support_tickets` table for formal complaints and claims.
 - **Vision Support**: Analyzes customer-uploaded photos for damage claims.
 
-## Installation
+## Installation & Update
+
+### Install
 ```bash
 composer require anwar/gunma-ai-agent
 ```
 
-## Setup
-1. Publish migrations and config:
+### Update
+If you are using `dev-main`, run:
 ```bash
-php artisan vendor:publish --provider="Anwar\GunmaAgent\GunmaAgentServiceProvider"
+composer update anwar/gunma-ai-agent
 ```
-2. Run migrations:
+
+## Setup & Configuration
+1. **Publish Assets**:
 ```bash
-php artisan migrate
+php artisan vendor:publish --provider="Anwar\GunmaAgent\GunmaAgentServiceProvider" --tag=gunma-agent-config
 ```
+2. **Environment Variables**:
+Ensure your `.env` has the necessary Pusher/Echo settings for real-time features.
+
+## Development & Pushing to GitHub
+If you are modifying the package locally in the `packages/` directory:
+1. **Navigate to the package**: `cd packages/gunma-ai-agent`
+2. **Commit changes**: `git add . && git commit -m "your message"`
+3. **Push to GitHub**: `git push origin main`
+4. **Update Host App**: Run `composer update` in your main Laravel app.
 
 ## Architecture
 - **ToolExecutor**: The brain that connects AI to your Laravel database and services.
 - **AgentOrchestrator**: Manages the message loop, context window, and streaming.
-- **EmailWebhookController**: Handles incoming support emails.
+- **Events**: Uses `MessageBroadcasted`, `AiStatusChanged`, and `UserTyping` for real-time sync via Laravel Echo.
 
 ## License
 MIT © Anwar
+

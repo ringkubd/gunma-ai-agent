@@ -22,7 +22,7 @@ class AiStatusChanged implements ShouldBroadcastNow
     public function broadcastOn(): array
     {
         return [
-            new PrivateChannel('gunma-chat.' . $this->session->id),
+            new Channel('gunma-chat.' . $this->session->id),
             new PrivateChannel('gunma-admin.chats'),
         ];
     }

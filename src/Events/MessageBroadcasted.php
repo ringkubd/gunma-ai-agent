@@ -24,7 +24,7 @@ class MessageBroadcasted implements ShouldBroadcastNow
     public function broadcastOn(): array
     {
         return [
-            new PrivateChannel('gunma-chat.' . $this->message->session_id),
+            new Channel('gunma-chat.' . $this->message->session_id),
             new PrivateChannel('gunma-admin.chats'), // For the dashboard monitor
         ];
     }

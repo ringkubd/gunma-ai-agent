@@ -18,18 +18,36 @@ composer require anwar/gunma-ai-agent
 ```
 
 ### Update
-If you are using `dev-main`, run:
 ```bash
 composer update anwar/gunma-ai-agent
 ```
 
 ## Setup & Configuration
-1. **Publish Assets**:
+
+1. **Publish Config**:
 ```bash
 php artisan vendor:publish --provider="Anwar\GunmaAgent\GunmaAgentServiceProvider" --tag=gunma-agent-config
 ```
-2. **Environment Variables**:
-Ensure your `.env` has the necessary Pusher/Echo settings for real-time features.
+
+2. **Environment Variables (.env)**:
+```env
+# AI & Search
+GUNMA_OPENAI_API_KEY=your_key
+GUNMA_QDRANT_URL=http://localhost:6333
+GUNMA_WEBSITE_URL=https://yourstore.com
+
+# Real-time (Pusher/Soketi)
+PUSHER_APP_ID=...
+PUSHER_APP_KEY=...
+PUSHER_APP_SECRET=...
+PUSHER_HOST=localhost
+PUSHER_PORT=6001
+PUSHER_SCHEME=http
+
+# Model Resolution (Optional)
+GUNMA_MODEL_ORDER=App\Models\Order
+GUNMA_MODEL_PRODUCT=App\Models\Product
+```
 
 ## Development & Pushing to GitHub
 If you are modifying the package locally in the `packages/` directory:

@@ -142,10 +142,12 @@ PROMPT;
 
     public function chat(ChatSession $session, string $userMessage): string
     {
+        // 0. Persist User Message immediately for real-time visibility
+        $this->persistUserMessage($session, $userMessage);
+
         // Check if AI is disabled for this session
         if (!$session->is_ai_enabled) {
-            $this->persistUserMessage($session, $userMessage);
-            return "Wait for agent..."; // User will see this via broadcast if needed, or we just wait.
+            return "Wait for agent..."; 
         }
 
         // 1. GREETING INTERCEPTOR: Zero-cost instant reply
@@ -193,9 +195,11 @@ PROMPT;
      */
     public function chatStream(ChatSession $session, string $userMessage): \Generator
     {
+        // 0. Persist User Message immediately for real-time visibility
+        $this->persistUserMessage($session, $userMessage);
+
         // Check if AI is disabled for this session
         if (!$session->is_ai_enabled) {
-            $this->persistUserMessage($session, $userMessage);
             yield $this->sseEvent('status', ['message' => 'Waiting for human agent...']);
             yield $this->sseEvent('done', []);
             return;
@@ -285,6 +289,9 @@ PROMPT;
                             'name' => $fnName,
                             'args' => $fnArgs,
                         ]);
+
+                        // Broadcast to admin dashboard
+                        event(new \Anwar\GunmaAgent\Events\ToolExecuting($session->id, "Executing tool: {$fnName}"));
 
                         $result = $this->toolExecutor->execute($fnName, $fnArgs);
 
@@ -451,6 +458,8 @@ PROMPT;
 
     public function persistUserMessage(ChatSession $session, string $userMessage): ChatMessage
     {
+        // Prevent double persistence in same request life-cycle if needed, 
+        // though typically these entry points are called once.
         $message = ChatMessage::create([
             'session_id' => $session->id,
             'role'       => 'user',
@@ -499,9 +508,6 @@ PROMPT;
         string $model = 'greeting',
         int $tokensUsed = 0,
     ): void {
-        // Save user message (if not already saved)
-        $this->persistUserMessage($session, $userMessage);
-
         // Save assistant message
         $message = ChatMessage::create([
             'session_id'  => $session->id,

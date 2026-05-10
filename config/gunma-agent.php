@@ -100,6 +100,23 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Auth Guard Resolution Order
+    |--------------------------------------------------------------------------
+    | The ResolveCustomer middleware tries these guards in order to silently
+    | resolve the logged-in user for both guest and authenticated requests.
+    |
+    | Common values:
+    |   'customer'  — custom guard in host app (e.g. Laravel Passport customers)
+    |   'sanctum'   — Laravel Sanctum (token or session)
+    |   'web'       — standard session-based auth
+    |   'api'       — token-based (Passport or custom)
+    |
+    | Set GUNMA_AUTH_GUARDS=customer|sanctum in your .env to override.
+    */
+    'auth_guards' => explode('|', env('GUNMA_AUTH_GUARDS', 'customer|sanctum|web')),
+
+    /*
+    |--------------------------------------------------------------------------
     | Host App Model Resolution
     |--------------------------------------------------------------------------
     | Configurable model class names for tool executor.
@@ -126,4 +143,14 @@ return [
     */
     'admin_route_prefix' => env('GUNMA_ADMIN_PREFIX', 'api/admin/chat'),
     'admin_middleware'   => explode('|', env('GUNMA_ADMIN_MIDDLEWARE', 'web')),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Broadcasting Channel Names
+    |--------------------------------------------------------------------------
+    | These must match the broadcastChannel option in useMonitor (dashboard)
+    | and the channel prefix used in useChat (widget).
+    */
+    'broadcast_admin_channel' => env('GUNMA_BROADCAST_ADMIN_CHANNEL', 'gunma-admin.chats'),
+    'broadcast_chat_prefix'   => env('GUNMA_BROADCAST_CHAT_PREFIX',   'gunma-chat'),
 ];

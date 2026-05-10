@@ -17,9 +17,16 @@ $prefix     = config('gunma-agent.route_prefix', 'api/chat');
 $middleware = config('gunma-agent.middleware', ['throttle:60,1']);
 $corsOrigins = config('gunma-agent.cors_origins', ['*']);
 
-// Public Chat Interface
+// Public Chat Interface — serves both guests and authenticated customers
+// ResolveCustomer middleware silently resolves auth without blocking guests.
 Route::prefix($prefix)
-    ->middleware(array_merge($middleware, [\Illuminate\Http\Middleware\HandleCors::class]))
+    ->middleware(array_merge(
+        $middleware,
+        [
+            \Illuminate\Http\Middleware\HandleCors::class,
+            \Anwar\GunmaAgent\Http\Middleware\ResolveCustomer::class,
+        ]
+    ))
     ->group(function () {
         Route::post('/upload', [ChatController::class, 'upload']);
         Route::post('/sessions', [ChatController::class, 'createSession']);

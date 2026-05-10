@@ -18,9 +18,8 @@ class ChatController extends Controller
     public function __construct(
         private readonly AgentOrchestrator $agent,
     ) {
-        if (request()->hasHeader('Authorization')) {
-            auth()->shouldUse('customer');
-        }
+        // Auth is resolved by the ResolveCustomer middleware.
+        // Use auth()->user() or auth()->id() freely in any method.
     }
 
     /* ── POST /chat/sessions — Create a new chat session ───────── */
@@ -34,19 +33,45 @@ class ChatController extends Controller
             'metadata'       => 'nullable|array',
         ]);
 
-        // Find existing active session or create new one
-        $session = ChatSession::where('visitor_id', $validated['visitor_id'])
-            ->where('channel', $validated['channel'] ?? 'web')
-            ->active()
-            ->first();
+        // If the request is authenticated, use the real customer identity
+        $customerId   = auth()->id();
+        $customerName = $validated['customer_name'] ?? null;
+
+        if ($customerId && ! $customerName) {
+            $user = auth()->user();
+            // Support name, full_name, or email as display name
+            $customerName = $user->name
+                ?? $user->full_name
+                ?? $user->email
+                ?? null;
+        }
+
+        // Find existing active session for this visitor (or customer)
+        $sessionQuery = ChatSession::where('channel', $validated['channel'] ?? 'web')->active();
+
+        if ($customerId) {
+            // Authenticated: match on customer_id first, then visitor_id as fallback
+            $session = (clone $sessionQuery)->where('customer_id', $customerId)->first()
+                ?? (clone $sessionQuery)->where('visitor_id', $validated['visitor_id'])->first();
+        } else {
+            // Guest: match on visitor_id only
+            $session = $sessionQuery->where('visitor_id', $validated['visitor_id'])->first();
+        }
 
         if (! $session) {
             $session = ChatSession::create([
                 'visitor_id'    => $validated['visitor_id'],
-                'customer_name' => $validated['customer_name'] ?? null,
+                'customer_id'   => $customerId,
+                'customer_name' => $customerName,
                 'channel'       => $validated['channel'] ?? 'web',
                 'status'        => 'active',
                 'metadata'      => $validated['metadata'] ?? null,
+            ]);
+        } elseif ($customerId && ! $session->customer_id) {
+            // Upgrade anonymous session to authenticated
+            $session->update([
+                'customer_id'   => $customerId,
+                'customer_name' => $customerName ?? $session->customer_name,
             ]);
         }
 

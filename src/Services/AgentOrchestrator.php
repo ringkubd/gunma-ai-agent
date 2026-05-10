@@ -208,8 +208,11 @@ PROMPT;
         // 1. GREETING INTERCEPTOR
         $greeting = $this->greetingInterceptor->intercept($userMessage);
         if ($greeting !== null) {
-            $this->persistMessages($session, $userMessage, $greeting, 'greeting');
-            yield $this->sseEvent('message', ['content' => $greeting]);
+            $msg = $this->persistMessages($session, $userMessage, $greeting, 'greeting');
+            yield $this->sseEvent('message', [
+                'id'      => $msg->id,
+                'content' => $greeting
+            ]);
             yield $this->sseEvent('done', []);
             return;
         }
@@ -217,8 +220,11 @@ PROMPT;
         // 2. SEMANTIC CACHE
         $cachedResponse = $this->qdrantService->getSemanticCache($userMessage);
         if ($cachedResponse !== null) {
-            $this->persistMessages($session, $userMessage, $cachedResponse, 'semantic_cache');
-            yield $this->sseEvent('message', ['content' => $cachedResponse]);
+            $msg = $this->persistMessages($session, $userMessage, $cachedResponse, 'semantic_cache');
+            yield $this->sseEvent('message', [
+                'id'      => $msg->id,
+                'content' => $cachedResponse
+            ]);
             yield $this->sseEvent('done', []);
             return;
         }
@@ -229,8 +235,11 @@ PROMPT;
             if (! empty($kbResults) && ($kbResults[0]['score'] ?? 0) > 0.94) {
                 $answer = $kbResults[0]['payload']['answer'] ?? $kbResults[0]['payload']['english']['a'] ?? null;
                 if ($answer) {
-                    $this->persistMessages($session, $userMessage, $answer, 'kb_fast');
-                    yield $this->sseEvent('message', ['content' => $answer]);
+                    $msg = $this->persistMessages($session, $userMessage, $answer, 'kb_fast');
+                    yield $this->sseEvent('message', [
+                        'id'      => $msg->id,
+                        'content' => $answer
+                    ]);
                     yield $this->sseEvent('done', []);
                     return;
                 }
@@ -311,19 +320,23 @@ PROMPT;
                     // Loop continues — let agent reason over tool output
                 } else {
                     $finalContent = $message['content'] ?? '';
-                    yield $this->sseEvent('message', ['content' => $finalContent]);
                     $keepRunning = false;
                 }
             } catch (\Exception $e) {
                 Log::error('[Agent] Agent loop error', ['error' => $e->getMessage()]);
                 $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
-                yield $this->sseEvent('message', ['content' => $finalContent]);
                 $keepRunning = false;
             }
         }
 
-        // Persist
-        $this->persistMessages($session, $userMessage, $finalContent, $this->openaiModel, $totalTokens);
+        // Persist first to get the real ID
+        $savedMessage = $this->persistMessages($session, $userMessage, $finalContent, $this->openaiModel, $totalTokens);
+
+        // Yield final message with the real ID
+        yield $this->sseEvent('message', [
+            'id'      => $savedMessage->id,
+            'content' => $finalContent
+        ]);
 
         // Index memory for future RAG
         $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
@@ -507,7 +520,7 @@ PROMPT;
         string $assistantMessage,
         string $model = 'greeting',
         int $tokensUsed = 0,
-    ): void {
+    ): ChatMessage {
         // Save assistant message
         $message = ChatMessage::create([
             'session_id'  => $session->id,
@@ -524,6 +537,8 @@ PROMPT;
 
         // Cache in Redis for fast context building
         $this->cacheMessageInRedis($session->id, 'assistant', $assistantMessage);
+
+        return $message;
     }
 
     private function cacheMessageInRedis(string $sessionId, string $role, string $content): void

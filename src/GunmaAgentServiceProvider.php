@@ -128,13 +128,18 @@ class GunmaAgentServiceProvider extends ServiceProvider
             return;
         }
 
-        \Illuminate\Support\Facades\Broadcast::channel('gunma-chat.{sessionId}', function ($user, $sessionId) {
+        $chatPrefix    = config('gunma-agent.broadcast_chat_prefix',   'gunma-chat');
+        $adminChannel  = config('gunma-agent.broadcast_admin_channel', 'gunma-admin.chats');
+
+        // Per-session channel (used by gunma-chat-widget)
+        \Illuminate\Support\Facades\Broadcast::channel("{$chatPrefix}.{sessionId}", function ($user, $sessionId) {
             return true; // Public or custom auth logic here
         });
 
-        \Illuminate\Support\Facades\Broadcast::channel('gunma-admin.chats', function ($user) {
+        // Admin monitoring channel (used by gunma-agent-dashboard)
+        \Illuminate\Support\Facades\Broadcast::channel($adminChannel, function ($user) {
             // Ideally check if user is admin: return $user->is_admin;
-            return true; 
+            return true;
         });
     }
 }

@@ -58,6 +58,15 @@ Route::prefix($adminPrefix)
         Route::post('/tickets/{id}/status', [ChatController::class, 'updateTicketStatus']);
     });
 
+// Agent Prompt Management (Admin)
+Route::prefix(config('gunma-agent.admin_route_prefix', 'api/admin/chat'))
+    ->middleware(config('gunma-agent.admin_middleware', ['web']))
+    ->group(function () {
+        Route::get('/prompts', [\Anwar\GunmaAgent\Http\Controllers\PromptController::class, 'index']);
+        Route::get('/prompts/{key}', [\Anwar\GunmaAgent\Http\Controllers\PromptController::class, 'show']);
+        Route::put('/prompts', [\Anwar\GunmaAgent\Http\Controllers\PromptController::class, 'update']);
+    });
+
 // Email Webhook (Incoming Support Emails)
 Route::prefix($prefix)->post('webhook/email', [\Anwar\GunmaAgent\Http\Controllers\EmailWebhookController::class, 'handle'])
     ->middleware(\Illuminate\Http\Middleware\HandleCors::class);

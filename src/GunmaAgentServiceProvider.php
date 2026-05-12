@@ -48,6 +48,7 @@ class GunmaAgentServiceProvider extends ServiceProvider
                 toolExecutor:        $app->make(ToolExecutor::class),
                 greetingInterceptor: $app->make(GreetingInterceptor::class),
                 qdrantService:       $app->make(QdrantService::class),
+                promptService:       $app->make(PromptService::class),
                 openaiKey:           config('gunma-agent.openai_api_key'),
                 openaiBaseUrl:       config('gunma-agent.openai_base_url'),
                 openaiModel:         config('gunma-agent.openai_model'),
@@ -55,6 +56,8 @@ class GunmaAgentServiceProvider extends ServiceProvider
                 maxHistory:          config('gunma-agent.max_history'),
             );
         });
+
+        $this->app->singleton(PromptService::class);
     }
 
     public function boot(): void

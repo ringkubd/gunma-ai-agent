@@ -7,6 +7,7 @@ namespace Anwar\GunmaAgent;
 use Illuminate\Support\ServiceProvider;
 use Anwar\GunmaAgent\Services\AgentOrchestrator;
 use Anwar\GunmaAgent\Services\EmbeddingService;
+use Anwar\GunmaAgent\Services\PromptService;
 use Anwar\GunmaAgent\Services\QdrantService;
 use Anwar\GunmaAgent\Services\ToolExecutor;
 use Anwar\GunmaAgent\Services\GreetingInterceptor;

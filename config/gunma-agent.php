@@ -18,7 +18,7 @@ return [
     */
     'ollama_url'         => env('GUNMA_OLLAMA_URL', 'http://localhost:11434'),
     'ollama_embed_model' => env('GUNMA_OLLAMA_EMBED_MODEL', 'nomic-embed-text'),
-    'ollama_chat_model'  => env('GUNMA_OLLAMA_CHAT_MODEL', 'gemma4:latest'),
+    'ollama_chat_model'  => env('GUNMA_OLLAMA_CHAT_MODEL', 'gunma-halal-ai:latest'),
 
     /*
     |--------------------------------------------------------------------------

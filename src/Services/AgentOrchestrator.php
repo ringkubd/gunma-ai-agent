@@ -34,7 +34,7 @@ class AgentOrchestrator
         private readonly string              $websiteUrl,
         private readonly int                 $maxHistory,
         private readonly string              $ollamaUrl = 'http://localhost:11434',
-        private readonly string              $ollamaChatModel = 'gemma4:latest',
+        private readonly string              $ollamaChatModel = 'gunma-halal-ai:latest',
     ) {
         $dbPrompt = $this->promptService->getSystemPrompt();
         $styleInstruction = $this->promptService->getStyleInstruction();
@@ -379,10 +379,9 @@ class AgentOrchestrator
 
             $ollamaMessages = [];
             foreach ($messages as $msg) {
-                if ($msg['role'] === 'system') {
-                    $ollamaMessages[] = ['role' => 'system', 'content' => $msg['content']];
-                } elseif (in_array($msg['role'], ['user', 'assistant'])) {
-                    $ollamaMessages[] = ['role' => $msg['role'], 'content' => $msg['content']];
+                $role = $msg['role'] ?? '';
+                if (in_array($role, ['system', 'user', 'assistant'])) {
+                    $ollamaMessages[] = ['role' => $role, 'content' => $msg['content'] ?? ''];
                 }
             }
 
@@ -393,23 +392,29 @@ class AgentOrchestrator
                     'stream'   => false,
                     'options'  => [
                         'temperature' => 0.7,
-                        'num_predict' => 2048,
+                        'num_predict' => 1024,
                     ],
                 ]);
 
             if (! $response->ok()) {
-                Log::error('[Agent] Ollama fallback error', ['body' => $response->body()]);
+                Log::error('[Agent] Ollama fallback error', ['status' => $response->status(), 'body' => $response->body()]);
                 return null;
             }
 
             $data = $response->json();
-            $content = $data['message']['content'] ?? null;
+            $message = $data['message'] ?? [];
+            $content = $message['content'] ?? '';
 
-            if ($content) {
+            // Some Ollama models return content in a separate 'thinking' field
+            if (empty($content) && ! empty($message['thinking'])) {
+                $content = $message['thinking'];
+            }
+
+            if (! empty($content)) {
                 Log::info('[Agent] Ollama fallback succeeded', ['model' => $this->ollamaChatModel]);
             }
 
-            return $content;
+            return $content ?: null;
         } catch (\Exception $e) {
             Log::error('[Agent] Ollama fallback exception', ['error' => $e->getMessage()]);
             return null;

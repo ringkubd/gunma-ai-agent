@@ -33,6 +33,8 @@ class AgentOrchestrator
         private readonly string              $openaiModel,
         private readonly string              $websiteUrl,
         private readonly int                 $maxHistory,
+        private readonly string              $ollamaUrl = 'http://localhost:11434',
+        private readonly string              $ollamaChatModel = 'gemma4:latest',
     ) {
         $dbPrompt = $this->promptService->getSystemPrompt();
         $styleInstruction = $this->promptService->getStyleInstruction();
@@ -162,10 +164,29 @@ class AgentOrchestrator
         $totalTokens = 0;
         $iterations = 0;
         $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
+        $usedFallback = false;
 
         while ($keepRunning && $iterations < $maxIterations) {
             $iterations++;
             try {
+                if ($usedFallback) {
+                    yield $this->sseEvent('tool_call', [
+                        'name' => 'ollama_fallback',
+                        'args' => ['model' => $this->ollamaChatModel],
+                    ]);
+
+                    $reply = $this->callOllama($messages);
+                    if ($reply) {
+                        $finalContent = $reply;
+                        yield $this->sseEvent('message', ['content' => $finalContent]);
+                    } else {
+                        $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
+                        yield $this->sseEvent('message', ['content' => $finalContent]);
+                    }
+                    $keepRunning = false;
+                    continue;
+                }
+
                 Log::debug('[Agent] Calling OpenAI', ['model' => $this->openaiModel, 'url' => $url, 'iteration' => $iterations]);
                 $response = Http::withToken($this->openaiKey)
                     ->timeout(60)
@@ -177,10 +198,9 @@ class AgentOrchestrator
                     ]);
 
                 if (! $response->ok()) {
-                    Log::error('[Agent] OpenAI API error', ['body' => $response->body()]);
-                    $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
-                    yield $this->sseEvent('message', ['content' => $finalContent]);
-                    $keepRunning = false;
+                    Log::warning('[Agent] OpenAI API error, falling back to Ollama', ['status' => $response->status(), 'body' => $response->body()]);
+                    yield $this->sseEvent('status', ['message' => 'OpenAI unavailable, switching to local AI...']);
+                    $usedFallback = true;
                     continue;
                 }
 
@@ -226,8 +246,14 @@ class AgentOrchestrator
                     $keepRunning = false;
                 }
             } catch (\Exception $e) {
-                Log::error('[Agent] Agent loop error', ['error' => $e->getMessage()]);
+                Log::error('[Agent] Agent loop error, falling back to Ollama', ['error' => $e->getMessage()]);
+                if (! $usedFallback) {
+                    yield $this->sseEvent('status', ['message' => 'OpenAI error, switching to local AI...']);
+                    $usedFallback = true;
+                    continue;
+                }
                 $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
+                yield $this->sseEvent('message', ['content' => $finalContent]);
                 $keepRunning = false;
             }
         }
@@ -263,10 +289,23 @@ class AgentOrchestrator
         $totalTokens = 0;
         $iterations = 0;
         $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
+        $usedFallback = false;
 
         while ($keepRunning && $iterations < $maxIterations) {
             $iterations++;
             try {
+                if ($usedFallback) {
+                    // Already fell back to Ollama — no tools available, just generate
+                    $reply = $this->callOllama($messages);
+                    if ($reply) {
+                        $finalContent = $reply;
+                    } else {
+                        $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
+                    }
+                    $keepRunning = false;
+                    continue;
+                }
+
                 Log::debug('[Agent] Calling OpenAI (sync)', ['model' => $this->openaiModel, 'iteration' => $iterations]);
                 $response = Http::withToken($this->openaiKey)
                     ->timeout(60)
@@ -278,8 +317,9 @@ class AgentOrchestrator
                     ]);
 
                 if (! $response->ok()) {
-                    Log::error('[Agent] OpenAI error', ['body' => $response->body()]);
-                    return "I'm sorry, I encountered an error. How else can I help you?";
+                    Log::warning('[Agent] OpenAI error, falling back to Ollama', ['status' => $response->status(), 'body' => $response->body()]);
+                    $usedFallback = true;
+                    continue;
                 }
 
                 $data     = $response->json();
@@ -307,13 +347,17 @@ class AgentOrchestrator
                     $keepRunning  = false;
                 }
             } catch (\Exception $e) {
-                Log::error('[Agent] Loop error', ['error' => $e->getMessage()]);
+                Log::error('[Agent] Loop error, falling back to Ollama', ['error' => $e->getMessage()]);
+                if (! $usedFallback) {
+                    $usedFallback = true;
+                    continue;
+                }
                 $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
                 $keepRunning  = false;
             }
         }
 
-        $this->persistMessages($session, $userMessage, $finalContent, $this->openaiModel, $totalTokens);
+        $this->persistMessages($session, $userMessage, $finalContent, $usedFallback ? $this->ollamaChatModel : $this->openaiModel, $totalTokens);
 
         // Index memory for future RAG
         $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
@@ -324,6 +368,52 @@ class AgentOrchestrator
         }
 
         return $finalContent;
+    }
+
+    /* ── Private: Ollama Fallback ───────────────────────────────── */
+
+    private function callOllama(array $messages): ?string
+    {
+        try {
+            $url = rtrim($this->ollamaUrl, '/') . '/api/chat';
+
+            $ollamaMessages = [];
+            foreach ($messages as $msg) {
+                if ($msg['role'] === 'system') {
+                    $ollamaMessages[] = ['role' => 'system', 'content' => $msg['content']];
+                } elseif (in_array($msg['role'], ['user', 'assistant'])) {
+                    $ollamaMessages[] = ['role' => $msg['role'], 'content' => $msg['content']];
+                }
+            }
+
+            $response = Http::timeout(120)
+                ->post($url, [
+                    'model'    => $this->ollamaChatModel,
+                    'messages' => $ollamaMessages,
+                    'stream'   => false,
+                    'options'  => [
+                        'temperature' => 0.7,
+                        'num_predict' => 2048,
+                    ],
+                ]);
+
+            if (! $response->ok()) {
+                Log::error('[Agent] Ollama fallback error', ['body' => $response->body()]);
+                return null;
+            }
+
+            $data = $response->json();
+            $content = $data['message']['content'] ?? null;
+
+            if ($content) {
+                Log::info('[Agent] Ollama fallback succeeded', ['model' => $this->ollamaChatModel]);
+            }
+
+            return $content;
+        } catch (\Exception $e) {
+            Log::error('[Agent] Ollama fallback exception', ['error' => $e->getMessage()]);
+            return null;
+        }
     }
 
     /* ── Private: Build Context Window ─────────────────────────── */

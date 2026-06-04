@@ -55,6 +55,8 @@ class GunmaAgentServiceProvider extends ServiceProvider
                 openaiModel:         config('gunma-agent.openai_model'),
                 websiteUrl:          config('gunma-agent.website_url'),
                 maxHistory:          config('gunma-agent.max_history'),
+                ollamaUrl:           config('gunma-agent.ollama_url'),
+                ollamaChatModel:     config('gunma-agent.ollama_chat_model'),
             );
         });
 

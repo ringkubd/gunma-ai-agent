@@ -31,6 +31,8 @@ class ChatMessage extends Model
         'tokens_used' => 'integer',
     ];
 
+    protected $touches = ['session'];
+
     /* ── Relationships ─────────────────────────────────────────── */
 
     public function session(): BelongsTo

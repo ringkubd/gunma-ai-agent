@@ -10,6 +10,7 @@ use Anwar\GunmaAgent\Services\AgentOrchestrator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -249,17 +250,20 @@ class ChatController extends Controller
             ->latest('updated_at')
             ->get()
             ->map(function ($s) {
+                $feedback = DB::table('chat_feedback')->where('session_id', $s->id)->first();
                 return [
-                    'id'             => (string) $s->id,
-                    'visitor_id'     => (string) ($s->visitor_id ?? ''),
-                    'customer_name'  => $s->resolved_name,
-                    'customer_email' => $s->resolved_email,
-                    'channel'        => $s->channel ?? 'web',
-                    'status'         => $s->status ?? 'active',
-                    'is_ai_enabled'  => (bool) ($s->is_ai_enabled ?? true),
-                    'messages_count' => $s->messages_count ?? 0,
-                    'updated_at'     => (string) ($s->updated_at ?? $s->created_at),
-                    'metadata'       => [
+                    'id'               => (string) $s->id,
+                    'visitor_id'       => (string) ($s->visitor_id ?? ''),
+                    'customer_name'    => $s->resolved_name,
+                    'customer_email'   => $s->resolved_email,
+                    'channel'          => $s->channel ?? 'web',
+                    'status'           => $s->status ?? 'active',
+                    'is_ai_enabled'    => (bool) ($s->is_ai_enabled ?? true),
+                    'messages_count'   => $s->messages_count ?? 0,
+                    'updated_at'       => (string) ($s->updated_at ?? $s->created_at),
+                    'feedback_rating'  => $feedback ? (int) $feedback->rating : null,
+                    'feedback_comment' => $feedback ? $feedback->comment : null,
+                    'metadata'         => [
                         'priority_score' => (int) ($s->metadata['priority_score'] ?? 0),
                     ],
                 ];

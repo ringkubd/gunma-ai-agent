@@ -16,11 +16,17 @@ class ChatSession extends Model
 
     protected $fillable = [
         'visitor_id',
+        'customer_id',
         'customer_name',
+        'customer_email',
         'channel',
         'status',
         'is_ai_enabled',
         'metadata',
+    ];
+
+    protected $appends = [
+        'resolved_name',
     ];
 
     protected $casts = [
@@ -52,8 +58,48 @@ class ChatSession extends Model
         return $query->where('channel', $channel);
     }
 
-    /* ── Helpers ───────────────────────────────────────────────── */
+    /* ── Accessors ─────────────────────────────────────────────── */
 
+    public function getResolvedNameAttribute(): ?string
+    {
+        if ($this->customer_name) {
+            return $this->customer_name;
+        }
+
+        if ($this->customer_id) {
+            $model = config('gunma-agent.models.customer');
+            if ($model && class_exists($model)) {
+                $customer = $model::find($this->customer_id);
+                if ($customer) {
+                    return $customer->name ?? $customer->first_name ?? null;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    public function getResolvedEmailAttribute(): ?string
+    {
+        if ($this->customer_email) {
+            return $this->customer_email;
+        }
+
+        if ($this->customer_id) {
+            $model = config('gunma-agent.models.customer');
+            if ($model && class_exists($model)) {
+                $customer = $model::find($this->customer_id);
+                if ($customer) {
+                    return $customer->email ?? null;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /* ── Helpers ───────────────────────────────────────────────── */
+    
     public function end(): void
     {
         $this->update(['status' => 'ended']);

@@ -25,6 +25,17 @@ return [
     |--------------------------------------------------------------------------
     */
     'qdrant_url'         => env('GUNMA_QDRANT_URL', 'http://localhost:6333'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Qdrant Environment Isolation
+    |--------------------------------------------------------------------------
+    | When beta and production share one Qdrant instance, set this to a unique
+    | prefix per environment (e.g. "beta_" or "prod_"). All collection names
+    | will be prefixed at runtime so data never mixes.
+    */
+    'qdrant_collection_prefix' => env('GUNMA_COLLECTION_PREFIX', ''),
+
     'qdrant_collections' => [
         'products' => env('GUNMA_COLLECTION_PRODUCTS', 'products'),
         'recipes'  => env('GUNMA_COLLECTION_RECIPES', 'recipes'),
@@ -123,10 +134,11 @@ return [
     | Allows the package to work without hard-coded dependencies on the host app.
     */
     'models' => [
-        'order'   => env('GUNMA_MODEL_ORDER', \App\Models\Order::class),
-        'product' => env('GUNMA_MODEL_PRODUCT', \App\Models\Product::class),
-        'cart'    => env('GUNMA_MODEL_CART', \App\Models\Cart::class),
-        'stock'   => env('GUNMA_MODEL_STOCK', \App\Models\Stock::class),
+        'customer' => env('GUNMA_MODEL_CUSTOMER', \App\Models\Customer::class),
+        'order'    => env('GUNMA_MODEL_ORDER', \App\Models\Order::class),
+        'product'  => env('GUNMA_MODEL_PRODUCT', \App\Models\Product::class),
+        'cart'     => env('GUNMA_MODEL_CART', \App\Models\Cart::class),
+        'stock'    => env('GUNMA_MODEL_STOCK', \App\Models\Stock::class),
     ],
 
     /*

@@ -1,6 +1,7 @@
 {
     "name": "anwar/gunma-ai-agent",
     "description": "AI Agent orchestrator for Gunma Halal Food — OpenAI tool calling, Qdrant vector search, Ollama embeddings",
+    "version": "0.1.5",
     "type": "library",
     "license": "MIT",
     "authors": [

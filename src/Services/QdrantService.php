@@ -19,7 +19,12 @@ class QdrantService
         private readonly string           $qdrantUrl,
         private readonly EmbeddingService $embeddingService,
     ) {
-        $this->collections = config('gunma-agent.qdrant_collections');
+        $prefix = config('gunma-agent.qdrant_collection_prefix', '');
+        $raw = config('gunma-agent.qdrant_collections', []);
+        $this->collections = [];
+        foreach ($raw as $key => $name) {
+            $this->collections[$key] = $prefix . $name;
+        }
     }
 
     /* ── Product Search (OpenAI embeddings, 1536d) ─────────────── */

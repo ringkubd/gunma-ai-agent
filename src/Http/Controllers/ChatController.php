@@ -247,9 +247,26 @@ class ChatController extends Controller
     {
         $sessions = ChatSession::withCount('messages')
             ->latest('updated_at')
-            ->paginate(20);
+            ->get()
+            ->map(function ($s) {
+                return [
+                    'id'             => (string) $s->id,
+                    'visitor_id'     => (string) ($s->visitor_id ?? ''),
+                    'customer_name'  => $s->resolved_name,
+                    'customer_email' => $s->resolved_email,
+                    'channel'        => $s->channel ?? 'web',
+                    'status'         => $s->status ?? 'active',
+                    'is_ai_enabled'  => (bool) ($s->is_ai_enabled ?? true),
+                    'messages_count' => $s->messages_count ?? 0,
+                    'updated_at'     => (string) ($s->updated_at ?? $s->created_at),
+                    'metadata'       => [
+                        'priority_score' => (int) ($s->metadata['priority_score'] ?? 0),
+                    ],
+                ];
+            })
+            ->values();
 
-        return response()->json($sessions);
+        return response()->json(['data' => $sessions]);
     }
 
     /**
@@ -260,7 +277,10 @@ class ChatController extends Controller
         $session = ChatSession::with(['messages' => fn($q) => $q->oldest()->take(100)])
             ->findOrFail($sessionId);
 
-        return response()->json($session);
+        return response()->json([
+            'session' => $session,
+            'customer_name' => $session->resolved_name,
+        ]);
     }
 
     /**

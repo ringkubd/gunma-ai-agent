@@ -135,11 +135,13 @@ return [
     | Allows the package to work without hard-coded dependencies on the host app.
     */
     'models' => [
-        'customer' => env('GUNMA_MODEL_CUSTOMER', \App\Models\Customer::class),
-        'order'    => env('GUNMA_MODEL_ORDER', \App\Models\Order::class),
-        'product'  => env('GUNMA_MODEL_PRODUCT', \App\Models\Product::class),
-        'cart'     => env('GUNMA_MODEL_CART', \App\Models\Cart::class),
-        'stock'    => env('GUNMA_MODEL_STOCK', \App\Models\Stock::class),
+        'customer'   => env('GUNMA_MODEL_CUSTOMER', \App\Models\Customer::class),
+        'order'      => env('GUNMA_MODEL_ORDER', \App\Models\Order::class),
+        'product'    => env('GUNMA_MODEL_PRODUCT', \App\Models\Product::class),
+        'cart'       => env('GUNMA_MODEL_CART', \App\Models\Cart::class),
+        'stock'      => env('GUNMA_MODEL_STOCK', \App\Models\Stock::class),
+        'post_code'  => env('GUNMA_MODEL_POST_CODE', \App\Models\PostCode::class),
+        'review'     => env('GUNMA_MODEL_REVIEW', \App\Models\Review::class),
     ],
 
     /*

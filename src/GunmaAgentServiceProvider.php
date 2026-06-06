@@ -6,6 +6,7 @@ namespace Anwar\GunmaAgent;
 
 use Illuminate\Support\ServiceProvider;
 use Anwar\GunmaAgent\Services\AgentOrchestrator;
+use Anwar\GunmaAgent\Services\CustomerInsightService;
 use Anwar\GunmaAgent\Services\EmbeddingService;
 use Anwar\GunmaAgent\Services\PromptService;
 use Anwar\GunmaAgent\Services\QdrantService;
@@ -37,6 +38,8 @@ class GunmaAgentServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(GreetingInterceptor::class);
+
+        $this->app->singleton(CustomerInsightService::class);
 
         $this->app->singleton(ToolExecutor::class, function ($app) {
             return new ToolExecutor(

@@ -58,6 +58,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Customer Insight Analysis
+    |--------------------------------------------------------------------------
+    | Analyzes order history to build personalized purchase patterns.
+    | Used by reorder_suggestions and frequently_bought_together tools.
+    */
+    'customer_insight' => [
+        'min_orders_for_analysis' => 2,
+        'reorder_window_days'     => 21,
+        'max_suggestions'         => 5,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Laravel Scout Integration
     |--------------------------------------------------------------------------
     | If enabled, the package will register a 'qdrant' engine for Laravel Scout.

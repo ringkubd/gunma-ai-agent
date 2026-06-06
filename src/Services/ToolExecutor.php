@@ -12,6 +12,13 @@ class ToolExecutor
         private readonly QdrantService $qdrantService,
     ) {}
 
+    /* ── Helper: get insight service (lazy load) ───────────────── */
+
+    private function insightService(): CustomerInsightService
+    {
+        return app(CustomerInsightService::class);
+    }
+
     public function execute(string $functionName, array $args): mixed
     {
         Log::info("[ToolExecutor] {$functionName}", $args);
@@ -37,6 +44,8 @@ class ToolExecutor
             'submit_product_review'          => $this->submitProductReview($args),
             'create_order_claim'             => $this->createOrderClaim($args),
             'get_personalized_recommendations' => $this->getPersonalizedRecommendations($args),
+            'reorder_suggestions'            => $this->getReorderSuggestions($args),
+            'frequently_bought_together'     => $this->getFrequentlyBoughtTogether($args),
             'get_active_promotions'          => $this->getActivePromotions(),
             'hand_off_to_human'              => $this->handOffToHuman($args),
             default                          => ['error' => "Unknown tool: {$functionName}"],
@@ -165,14 +174,21 @@ class ToolExecutor
 
         $orderModel = $this->getModelClass('order', \App\Models\Order::class);
         $recentOrders = $orderModel
-            ? $customer->orders()->latest()->take(3)->get()->map(fn($o) => [
+            ? $customer->orders()->latest()->take(5)->get()->map(fn($o) => [
                 'id' => $o->id,
                 'tracking_no' => $o->tracking_no,
                 'status' => $o->status,
                 'total_amount' => (float) $o->total_amount,
                 'date' => $o->created_at->format('Y-m-d'),
+                'items' => $o->orderItems->map(fn($i) => [
+                    'product' => $i->product_title ?? $i->product?->title,
+                    'quantity' => $i->quantity,
+                ])->toArray(),
             ])->toArray()
             : [];
+
+        // Purchase insights
+        $insight = $this->insightService()->analyzeCustomer($customer->id);
 
         return [
             'status' => 'success',
@@ -181,6 +197,11 @@ class ToolExecutor
             'phone' => $customer->phone ?? null,
             'available_points' => (int) ($customer->available_point ?? 0),
             'wallet_amount' => (float) ($customer->amount ?? 0),
+            'total_orders' => $insight['total_orders'] ?? 0,
+            'avg_order_value' => $insight['avg_order_value'] ?? 0,
+            'days_since_last_order' => $insight['days_since_last'] ?? 0,
+            'top_categories' => $insight['top_categories'] ?? [],
+            'frequent_items' => $insight['frequent_items'] ?? [],
             'recent_orders' => $recentOrders,
             'points_history' => method_exists($customer, 'pointHistories')
                 ? $customer->pointHistories()->latest()->take(5)->get()->map(fn($p) => [
@@ -338,6 +359,51 @@ class ToolExecutor
                 'image_url' => $p->images->first()?->image_path,
                 'slug'      => $p->slug,
             ])->toArray();
+    }
+
+    /* ── New: Reorder Suggestions ──────────────────────────────── */
+
+    private function getReorderSuggestions(array $args): array
+    {
+        $customer = auth('customer')->user();
+        if (!$customer) return ['error' => 'Please log in to get personalized suggestions.'];
+
+        $suggestions = $this->insightService()->getReorderSuggestions(
+            $customer->id,
+            (int) ($args['limit'] ?? 5)
+        );
+
+        if (empty($suggestions)) {
+            return ['status' => 'success', 'message' => 'No reorder suggestions yet. The more you shop, the smarter I get!'];
+        }
+
+        return [
+            'status' => 'success',
+            'total_orders' => $this->insightService()->analyzeCustomer($customer->id)['total_orders'] ?? 0,
+            'suggestions' => $suggestions,
+        ];
+    }
+
+    /* ── New: Frequently Bought Together ───────────────────────── */
+
+    private function getFrequentlyBoughtTogether(array $args): array
+    {
+        $customer = auth('customer')->user();
+        $productId = $args['product_id'] ?? null;
+        if (!$productId) return ['error' => 'Please provide a product_id.'];
+
+        if ($customer) {
+            $items = $this->insightService()->getFrequentlyBoughtTogether(
+                $customer->id,
+                (int) $productId,
+                (int) ($args['limit'] ?? 5)
+            );
+            if (!empty($items)) {
+                return ['status' => 'success', 'items' => $items, 'source' => 'personalized'];
+            }
+        }
+
+        return ['status' => 'success', 'items' => [], 'message' => 'No related items found yet. Try browsing with filter_products instead.'];
     }
 
     private function getCartContents(): array
@@ -941,6 +1007,34 @@ class ToolExecutor
                     'name' => 'get_active_promotions',
                     'description' => 'Check current store discounts, coupons, and special deals.',
                     'parameters' => ['type' => 'object', 'properties' => (object)[]],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'reorder_suggestions',
+                    'description' => 'Check if the logged-in customer likely needs to restock frequently bought items. Uses order history to predict when staples are running low.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'limit' => ['type' => 'integer', 'description' => 'Max suggestions (default 5).'],
+                        ],
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'frequently_bought_together',
+                    'description' => 'Find products the customer commonly buys together with a given product. Use when user asks "what goes with this?"',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'product_id' => ['type' => 'integer', 'description' => 'The product ID to find companions for.'],
+                            'limit' => ['type' => 'integer', 'description' => 'Max suggestions (default 5).'],
+                        ],
+                        'required' => ['product_id'],
+                    ],
                 ],
             ],
             [

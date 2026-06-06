@@ -51,6 +51,26 @@ class AgentOrchestrator
             if ($ctx['previous_orders'] > 0) $lines[] = "- Previous orders: {$ctx['previous_orders']}";
             if ($ctx['points'] > 0) $lines[] = "- Loyalty points: {$ctx['points']}";
             if ($ctx['cart_count'] > 0) $lines[] = "- Items in cart: {$ctx['cart_count']} (check cart before suggesting products)";
+
+            // Purchase insight
+            $insight = $ctx['insight'];
+            if ($insight && ($insight['total_orders'] ?? 0) > 0) {
+                $lines[] = "- Avg order value: ¥" . number_format($insight['avg_order_value'] ?? 0, 2);
+                $lines[] = "- Days since last order: {$insight['days_since_last']}";
+                if (!empty($insight['top_categories'])) $lines[] = "- Favorite categories: " . implode(', ', $insight['top_categories']);
+                if (!empty($insight['frequent_items'])) {
+                    $lines[] = "- Frequently buys:";
+                    foreach (array_slice($insight['frequent_items'], 0, 5) as $item) {
+                        $lines[] = "  * {$item['title']} ({$item['purchase_count']}x, last {$item['days_since']}d ago)";
+                    }
+                }
+                if (!empty($insight['suggested_reorders'])) {
+                    $lines[] = "- Likely needs to reorder:";
+                    foreach (array_slice($insight['suggested_reorders'], 0, 3) as $item) {
+                        $lines[] = "  * {$item['title']} ({$item['days_since']}d since last — suggest restock)";
+                    }
+                }
+            }
             $parts[] = implode("\n", $lines);
         }
 
@@ -68,6 +88,7 @@ class AgentOrchestrator
             'previous_orders' => 0,
             'points' => 0,
             'cart_count' => 0,
+            'insight' => null,
         ];
 
         if (!$session->customer_id) return $ctx;
@@ -92,6 +113,10 @@ class AgentOrchestrator
                     if ($cartModel && class_exists($cartModel)) {
                         $ctx['cart_count'] = $cartModel::where('customer_id', $customer->id)->count();
                     }
+
+                    // Purchase insight
+                    $insightService = app(\Anwar\GunmaAgent\Services\CustomerInsightService::class);
+                    $ctx['insight'] = $insightService->analyzeCustomer($customer->id);
                 }
             }
         } catch (\Exception $e) {

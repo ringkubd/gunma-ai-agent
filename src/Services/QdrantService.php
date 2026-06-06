@@ -38,9 +38,11 @@ class QdrantService
 
     public function searchProducts(string $query, int $limit = 5): array
     {
-        $vector = $this->embeddingService->openaiEmbed($query);
+        $results = $this->doVectorSearch($this->collections['products'], $query, $limit, 'openai');
+        if (!empty($results)) return $results;
 
-        return $this->vectorSearch($this->collections['products'], $vector, $limit);
+        // Fallback: DB search when Qdrant is empty (e.g. after prefix change, not re-indexed yet)
+        return $this->fallbackDbSearch($query, $limit);
     }
 
     /**
@@ -48,21 +50,93 @@ class QdrantService
      */
     public function searchProductsBulk(array $queries, int $limitPerQuery = 3): array
     {
-        if (empty($queries)) {
-            return [];
+        if (empty($queries)) return [];
+
+        // Try Qdrant first
+        try {
+            $vectors = $this->embeddingService->openaiEmbedBulk($queries);
+            $results = [];
+            foreach ($queries as $index => $query) {
+                $hits = $this->vectorSearch($this->collections['products'], $vectors[$index], $limitPerQuery);
+                $results[] = [
+                    'query'   => $query,
+                    'results' => $hits,
+                ];
+            }
+            // If any query returned results, return all
+            if (!empty(array_filter($results, fn($r) => !empty($r['results'])))) {
+                return $results;
+            }
+        } catch (\Exception $e) {
+            Log::warning('[QdrantService] Bulk search failed, falling back to DB', ['error' => $e->getMessage()]);
         }
 
-        $vectors = $this->embeddingService->openaiEmbedBulk($queries);
+        // Fallback: DB search for each query
         $results = [];
-
-        foreach ($queries as $index => $query) {
+        foreach ($queries as $query) {
             $results[] = [
                 'query'   => $query,
-                'results' => $this->vectorSearch($this->collections['products'], $vectors[$index], $limitPerQuery),
+                'results' => $this->fallbackDbSearch($query, $limitPerQuery),
             ];
         }
-
         return $results;
+    }
+
+    /* ── DB Fallback Search ────────────────────────────────────── */
+
+    private function fallbackDbSearch(string $query, int $limit = 5): array
+    {
+        try {
+            $productModel = config('gunma-agent.models.product', \App\Models\Product::class);
+            if (!class_exists($productModel)) return [];
+
+            $products = $productModel::where('status', 'Active')
+                ->where('is_online_available', 1)
+                ->where(function ($q) use ($query) {
+                    $q->where('title', 'LIKE', "%{$query}%")
+                      ->orWhere('short_description', 'LIKE', "%{$query}%")
+                      ->orWhere('description', 'LIKE', "%{$query}%")
+                      ->orWhereHas('categories', fn($cq) => $cq->where('title', 'LIKE', "%{$query}%"));
+                })
+                ->with(['latestStock', 'images'])
+                ->limit($limit)
+                ->get();
+
+            return $products->map(fn($p) => [
+                'id'      => (string) $p->id,
+                'score'   => 0.95,
+                'payload' => [
+                    'id'       => $p->id,
+                    'title'    => $p->title,
+                    'slug'     => $p->slug,
+                    'price'    => (float) ($p->latestStock?->online_price ?? 0),
+                    'image'    => $p->images->first()?->image,
+                    'stock'    => $p->latestStock?->available_quantity ?? 0,
+                    'status'   => $p->status,
+                ],
+            ])->toArray();
+        } catch (\Exception $e) {
+            Log::warning('[QdrantService] DB fallback search failed', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
+
+    private function doVectorSearch(string $collection, string $query, int $limit, string $embedType): array
+    {
+        try {
+            $vector = $embedType === 'openai'
+                ? $this->embeddingService->openaiEmbed($query)
+                : $this->embeddingService->ollamaEmbed($query);
+            return $this->vectorSearch($collection, $vector, $limit);
+        } catch (\Exception $e) {
+            Log::warning('[QdrantService] Vector search failed', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
+    {
+        $vector = $this->embeddingService->openaiEmbed($query);
+
+        return $this->vectorSearch($this->collections['products'], $vector, $limit);
     }
 
     /* ── Recipe Search (Ollama embeddings, 768d) ───────────────── */

@@ -141,7 +141,18 @@ class AgentOrchestrator
             Log::warning('[Agent] KB fast check failed', ['error' => $e->getMessage()]);
         }
 
-        // 4. Full agent loop
+        // 4. Memory retrieval: find similar past Q&A to improve this response
+        try {
+            $similarMemories = $this->qdrantService->searchMemories($userMessage);
+            if (!empty($similarMemories)) {
+                Log::info('[Agent] Found ' . count($similarMemories) . ' similar past conversations');
+                // Memories are injected into context by buildContextWindow below
+            }
+        } catch (\Exception $e) {
+            Log::warning('[Agent] Memory retrieval failed', ['error' => $e->getMessage()]);
+        }
+
+        // 5. Full agent loop
         $result = $this->runAgentLoop($session, $userMessage);
 
         // Quality check: if response is empty, retry once
@@ -415,6 +426,30 @@ class AgentOrchestrator
         }
     }
 
+    /* ── Inject similar past conversations as context ─────────── */
+
+    private function injectMemoryContext(string $userMessage, array &$messages): void
+    {
+        try {
+            $memories = $this->qdrantService->searchMemories($userMessage, 3);
+            if (!empty($memories)) {
+                $lines = ["\n## SIMILAR PAST CONVERSATIONS (for reference)"];
+                foreach ($memories as $m) {
+                    $q = $m['query'] ?? '';
+                    $a = $m['answer'] ?? '';
+                    if ($q && $a) {
+                        $a = mb_strlen($a) > 300 ? mb_substr($a, 0, 300) . '...' : $a;
+                        $lines[] = "- Q: {$q}";
+                        $lines[] = "  A: {$a}";
+                    }
+                }
+                $messages[] = ['role' => 'system', 'content' => implode("\n", $lines)];
+            }
+        } catch (\Exception $e) {
+            Log::warning('[Agent] Memory injection failed', ['error' => $e->getMessage()]);
+        }
+    }
+
     /* ── Build Context Window ──────────────────────────────────── */
 
     private function buildContextWindow(ChatSession $session, string $userMessage): array
@@ -424,6 +459,9 @@ class AgentOrchestrator
         $messages = [
             ['role' => 'system', 'content' => $systemPrompt],
         ];
+
+        // Inject similar past conversations before history
+        $this->injectMemoryContext($userMessage, $messages);
 
         $history = $this->getRecentHistory($session);
 

@@ -54,7 +54,7 @@ return [
     | Higher means more precise matches required.
     */
     'semantic_cache_enabled'   => env('GUNMA_SEMANTIC_CACHE_ENABLED', true),
-    'semantic_cache_threshold' => env('GUNMA_SEMANTIC_CACHE_THRESHOLD', 0.95),
+    'semantic_cache_threshold' => env('GUNMA_SEMANTIC_CACHE_THRESHOLD', 0.88),
 
     /*
     |--------------------------------------------------------------------------

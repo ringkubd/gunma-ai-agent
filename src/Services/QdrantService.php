@@ -307,6 +307,27 @@ class QdrantService
     }
 
     /**
+     * Search past conversation memories for similar Q&As to augment context.
+     */
+    public function searchMemories(string $query, int $limit = 3): array
+    {
+        try {
+            $vector = $this->embeddingService->ollamaEmbed($query);
+            $results = $this->vectorSearch($this->collections['memories'], $vector, $limit);
+            $memories = [];
+            foreach ($results as $hit) {
+                if (($hit['score'] ?? 0) >= 0.85) {
+                    $memories[] = $hit['payload'];
+                }
+            }
+            return $memories;
+        } catch (\Exception $e) {
+            Log::warning('[QdrantService] Memory search failed', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
+
+    /**
      * Index a conversation memory for future RAG use.
      */
     public function indexMemory(string $sessionId, string $query, string $answer): void

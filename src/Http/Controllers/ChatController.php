@@ -341,6 +341,30 @@ class ChatController extends Controller
     }
 
     /**
+     * Get a single ticket with full details.
+     * GET /api/admin/chat/tickets/{id}
+     */
+    public function getTicket(string $id): JsonResponse
+    {
+        $ticket = \Anwar\GunmaAgent\Models\SupportTicket::findOrFail($id);
+
+        // Find related session messages if session_id exists
+        $messages = [];
+        if ($ticket->session_id) {
+            $messages = \Anwar\GunmaAgent\Models\ChatMessage::where('session_id', $ticket->session_id)
+                ->orderBy('created_at')
+                ->take(50)
+                ->get()
+                ->toArray();
+        }
+
+        return response()->json([
+            'ticket' => $ticket,
+            'messages' => $messages,
+        ]);
+    }
+
+    /**
      * Update a ticket's status.
      */
     public function updateTicketStatus(Request $request, string $id): JsonResponse

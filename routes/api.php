@@ -55,6 +55,7 @@ Route::prefix($adminPrefix)
         
         // Support Tickets
         Route::get('/tickets', [ChatController::class, 'listTickets']);
+        Route::get('/tickets/{id}', [ChatController::class, 'getTicket']);
         Route::post('/tickets/{id}/status', [ChatController::class, 'updateTicketStatus']);
     });
 

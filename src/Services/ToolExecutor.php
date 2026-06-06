@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Anwar\GunmaAgent\Services;
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class ToolExecutor
@@ -45,7 +46,10 @@ class ToolExecutor
             'create_order_claim'             => $this->createOrderClaim($args),
             'get_personalized_recommendations' => $this->getPersonalizedRecommendations($args),
             'reorder_suggestions'            => $this->getReorderSuggestions($args),
+            'seasonal_suggestions'           => $this->getSeasonalSuggestions($args),
             'frequently_bought_together'     => $this->getFrequentlyBoughtTogether($args),
+            'get_context_summary'            => $this->getContextSummary($args),
+            'record_conversation_summary'    => $this->recordSummary($args),
             'get_active_promotions'          => $this->getActivePromotions(),
             'hand_off_to_human'              => $this->handOffToHuman($args),
             default                          => ['error' => "Unknown tool: {$functionName}"],
@@ -404,6 +408,97 @@ class ToolExecutor
         }
 
         return ['status' => 'success', 'items' => [], 'message' => 'No related items found yet. Try browsing with filter_products instead.'];
+    }
+
+    /* ── New: Seasonal Suggestions ─────────────────────────────── */
+
+    private function getSeasonalSuggestions(array $args): array
+    {
+        $customer = auth('customer')->user();
+        $insight = $customer ? $this->insightService()->analyzeCustomer($customer->id) : null;
+
+        $triggerService = app(ProactiveTriggerService::class);
+        $triggers = $triggerService->getTriggers($insight);
+
+        return [
+            'status' => 'success',
+            'season' => $triggers['season'],
+            'time_period' => $triggers['time_period'],
+            'day' => $triggers['day'] ?? null,
+            'suggestions' => $triggers['seasonal_suggestions'] ?? [],
+            'time_suggestions' => $triggers['time_suggestions'] ?? [],
+            'day_suggestions' => $triggers['day_suggestions'] ?? [],
+            'ramadan_coming' => $triggers['ramadan_coming'] ?? false,
+            'eid_coming' => $triggers['eid_coming'] ?? false,
+            'reorder_alerts' => $triggers['reorder_alerts'] ?? [],
+        ];
+    }
+
+    /* ── New: Conversation Context Summary ─────────────────────── */
+
+    private function getContextSummary(array $args): array
+    {
+        $sessionId = $args['session_id'] ?? null;
+        if (!$sessionId) return ['error' => 'No session ID provided.'];
+
+        $summary = DB::table('conversation_summaries')
+            ->where('session_id', $sessionId)
+            ->latest()
+            ->first();
+
+        if (!$summary) {
+            // Try latest summary for this session
+            $lastSession = DB::table('conversation_summaries')
+                ->where('session_id', '!=', $sessionId)
+                ->where('customer_id', $args['customer_id'] ?? 0)
+                ->latest()
+                ->first();
+
+            if (!$lastSession) return ['status' => 'success', 'summary' => null, 'message' => 'No previous context.'];
+
+            return [
+                'status' => 'success',
+                'summary' => $lastSession->summary,
+                'key_topics' => json_decode($lastSession->key_topics ?? '[]', true),
+                'sentiment' => $lastSession->sentiment,
+                'follow_up_needed' => (bool) $lastSession->follow_up_needed,
+            ];
+        }
+
+        return [
+            'status' => 'success',
+            'summary' => $summary->summary,
+            'key_topics' => json_decode($summary->key_topics ?? '[]', true),
+            'sentiment' => $summary->sentiment,
+            'follow_up_needed' => (bool) $summary->follow_up_needed,
+        ];
+    }
+
+    /* ── New: Record Conversation Summary ──────────────────────── */
+
+    private function recordSummary(array $args): array
+    {
+        $sessionId = $args['session_id'] ?? null;
+        $customerId = $args['customer_id'] ?? null;
+        $summary = $args['summary'] ?? '';
+        $topics = $args['key_topics'] ?? [];
+        $sentiment = $args['sentiment'] ?? 'neutral';
+
+        if (!$sessionId || !$summary) return ['error' => 'Missing session_id or summary.'];
+
+        DB::table('conversation_summaries')->insert([
+            'id' => (string) \Illuminate\Support\Str::uuid(),
+            'session_id' => $sessionId,
+            'customer_id' => $customerId,
+            'summary' => $summary,
+            'key_topics' => json_encode($topics),
+            'sentiment' => $sentiment,
+            'follow_up_needed' => $args['follow_up_needed'] ?? false,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return ['status' => 'success', 'message' => 'Conversation summary stored.'];
     }
 
     private function getCartContents(): array
@@ -1026,14 +1121,40 @@ class ToolExecutor
                 'type' => 'function',
                 'function' => [
                     'name' => 'frequently_bought_together',
-                    'description' => 'Find products the customer commonly buys together with a given product. Use when user asks "what goes with this?"',
+                    'description' => 'Find products the customer commonly buys together with a given product.',
                     'parameters' => [
                         'type' => 'object',
                         'properties' => [
-                            'product_id' => ['type' => 'integer', 'description' => 'The product ID to find companions for.'],
+                            'product_id' => ['type' => 'integer', 'description' => 'The product ID.'],
                             'limit' => ['type' => 'integer', 'description' => 'Max suggestions (default 5).'],
                         ],
                         'required' => ['product_id'],
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'seasonal_suggestions',
+                    'description' => 'Get time-of-day, day-of-week, and seasonal product suggestions. Knows Ramadan/Eid specials.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => (object)[],
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'get_context_summary',
+                    'description' => 'Get a summary of previous conversations with this customer for context.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'session_id' => ['type' => 'string', 'description' => 'Current session ID.'],
+                            'customer_id' => ['type' => 'integer', 'description' => 'Customer ID if logged in.'],
+                        ],
+                        'required' => ['session_id'],
                     ],
                 ],
             ],

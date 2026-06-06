@@ -6,6 +6,7 @@ namespace Anwar\GunmaAgent\Services;
 
 use Anwar\GunmaAgent\Models\ChatMessage;
 use Anwar\GunmaAgent\Models\ChatSession;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
@@ -41,6 +42,19 @@ class AgentOrchestrator
         $ctx = $this->getUserContext($session);
         $parts = [$this->baseSystemPrompt];
 
+        // Time/season context
+        $triggers = app(\Anwar\GunmaAgent\Services\ProactiveTriggerService::class)->getTriggers($ctx['insight']);
+        $nowLines = [];
+        $nowLines[] = "## NOW";
+        $nowLines[] = "- Time: " . date('l, H:i');
+        $nowLines[] = "- Period: " . $triggers['time_period'];
+        $nowLines[] = "- Season: " . $triggers['season'];
+        if (!empty($triggers['seasonal_suggestions'])) $nowLines[] = "- Seasonal items in demand: " . implode(', ', array_slice($triggers['seasonal_suggestions'], 0, 5));
+        if ($triggers['ramadan_coming']) $nowLines[] = "- RAMADAN COMING: Be proactive about dates, semai, chola, haleem ingredients.";
+        if ($triggers['eid_coming']) $nowLines[] = "- EID COMING: Suggest premium cuts, sweets, cooking essentials.";
+        $parts[] = implode("\n", $nowLines);
+
+        // User context
         if ($ctx) {
             $lines = [];
             $lines[] = "## CURRENT USER CONTEXT";
@@ -306,6 +320,7 @@ class AgentOrchestrator
 
         $this->persistMessages($session, $userMessage, $finalContent, $usedFallback ? $this->ollamaChatModel : $this->openaiModel, $totalTokens);
         $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
+        $this->storeConversationSummary($session, $userMessage, $finalContent);
         if ($finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
             $this->qdrantService->setSemanticCache($userMessage, $finalContent);
         }
@@ -403,6 +418,7 @@ class AgentOrchestrator
         yield $this->sseEvent('message', ['id' => $savedMessage->id, 'content' => $finalContent]);
 
         $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
+        $this->storeConversationSummary($session, $userMessage, $finalContent);
         if ($finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
             $this->qdrantService->setSemanticCache($userMessage, $finalContent);
         }
@@ -453,9 +469,10 @@ class AgentOrchestrator
 
     /* ── Inject similar past conversations as context ─────────── */
 
-    private function injectMemoryContext(string $userMessage, array &$messages): void
+    private function injectMemoryContext(ChatSession $session, string $userMessage, array &$messages): void
     {
         try {
+            // Search conversation memories
             $memories = $this->qdrantService->searchMemories($userMessage, 3);
             if (!empty($memories)) {
                 $lines = ["\n## SIMILAR PAST CONVERSATIONS (for reference)"];
@@ -469,6 +486,21 @@ class AgentOrchestrator
                     }
                 }
                 $messages[] = ['role' => 'system', 'content' => implode("\n", $lines)];
+            }
+
+            // Add previous session summary if available
+            if ($session->customer_id) {
+                $lastSummary = DB::table('conversation_summaries')
+                    ->where('customer_id', $session->customer_id)
+                    ->latest()
+                    ->first();
+                if ($lastSummary && !empty($lastSummary->summary)) {
+                    $topics = json_decode($lastSummary->key_topics ?? '[]', true);
+                    $extra = '';
+                    if (!empty($topics)) $extra = "\nTopics: " . implode(', ', $topics);
+                    if ($lastSummary->follow_up_needed) $extra .= "\nFOLLOW-UP NEEDED: Customer had an unresolved issue — ask if it was resolved.";
+                    $messages[] = ['role' => 'system', 'content' => "## LAST CONVERSATION ({$lastSummary->sentiment} mood)\n{$lastSummary->summary}{$extra}"];
+                }
             }
         } catch (\Exception $e) {
             Log::warning('[Agent] Memory injection failed', ['error' => $e->getMessage()]);
@@ -486,7 +518,7 @@ class AgentOrchestrator
         ];
 
         // Inject similar past conversations before history
-        $this->injectMemoryContext($userMessage, $messages);
+        $this->injectMemoryContext($session, $userMessage, $messages);
 
         $history = $this->getRecentHistory($session);
 
@@ -545,6 +577,72 @@ class AgentOrchestrator
             ->map(fn($m) => ['role' => $m->role, 'content' => $m->content])
             ->values()
             ->all();
+    }
+
+    /* ── Store Conversation Summary ────────────────────────────── */
+
+    private function storeConversationSummary(ChatSession $session, string $userMessage, string $assistantMessage): void
+    {
+        try {
+            $q = mb_substr($userMessage, 0, 200);
+            $a = mb_substr($assistantMessage, 0, 300);
+            $summary = "Q: {$q} → A: {$a}";
+
+            // Simple keyword extraction for topics
+            $keywords = $this->extractKeywords($userMessage . ' ' . $assistantMessage);
+            $sentiment = $this->detectSentiment($userMessage);
+
+            DB::table('conversation_summaries')->insert([
+                'id' => (string) \Illuminate\Support\Str::uuid(),
+                'session_id' => $session->id,
+                'customer_id' => $session->customer_id,
+                'summary' => $summary,
+                'key_topics' => json_encode(array_slice($keywords, 0, 5)),
+                'sentiment' => $sentiment,
+                'follow_up_needed' => $sentiment === 'negative' || str_contains(strtolower($assistantMessage), 'team will'),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        } catch (\Exception $e) {
+            Log::warning('[Agent] Summary storage failed', ['error' => $e->getMessage()]);
+        }
+    }
+
+    private function extractKeywords(string $text): array
+    {
+        $topicWords = [
+            'order', 'delivery', 'tracking', 'payment', 'refund', 'cancel',
+            'rice', 'oil', 'meat', 'chicken', 'beef', 'fish', 'vegetable',
+            'spice', 'lentil', 'dal', 'masala', 'biryani', 'curry', 'halal',
+            'price', 'discount', 'coupon', 'promotion', 'cart', 'checkout',
+            'address', 'post code', 'ramadan', 'eid', 'iftaar', 'complaint',
+            'recipe', 'cooking', 'bazar', 'shopping', 'restock', 'monthly',
+            'stock', 'available', 'missing', 'damaged', 'wrong', 'quality',
+        ];
+        $found = [];
+        $lower = strtolower($text);
+        foreach ($topicWords as $word) {
+            if (str_contains($lower, $word)) {
+                $found[] = $word;
+            }
+        }
+        return $found;
+    }
+
+    private function detectSentiment(string $text): string
+    {
+        $positive = ['thanks', 'thank', 'great', 'good', 'excellent', 'love', 'wonderful', 'helpful', 'best'];
+        $negative = ['bad', 'worst', 'angry', 'terrible', 'scam', 'fraud', 'useless', 'horrible', 'kharap', 'problem', 'complain', 'never', 'waste', 'disappointed'];
+
+        $lower = strtolower($text);
+        $posScore = 0;
+        $negScore = 0;
+        foreach ($positive as $w) if (str_contains($lower, $w)) $posScore++;
+        foreach ($negative as $w) if (str_contains($lower, $w)) $negScore++;
+
+        if ($negScore > $posScore) return 'negative';
+        if ($posScore > 0) return 'positive';
+        return 'neutral';
     }
 
     /* ── Persist Messages ──────────────────────────────────────── */

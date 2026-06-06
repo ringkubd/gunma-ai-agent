@@ -352,9 +352,52 @@ class ToolExecutor
 
     private function getFeaturedRecipe(): array
     {
+        // Try Qdrant first
         $results = $this->qdrantService->searchRecipes('halal', 5);
-        if (empty($results)) return ['error' => 'No recipes found.'];
-        return $results[array_rand($results)]['payload'];
+        if (!empty($results)) {
+            return $results[array_rand($results)]['payload'];
+        }
+
+        // Fallback: curated Bengali recipes when Qdrant is empty
+        $recipes = [
+            [
+                'title' => 'Classic Beef Biryani',
+                'ingredients' => ['beef', 'rice', 'onion', 'garlic', 'ginger', 'turmeric', 'chili powder', 'cumin', 'coriander', 'biryani spice', 'ghee', 'saffron'],
+                'instructions' => 'Marinate beef with spices for 2hrs. Fry onions until golden. Layer with parboiled rice. Cook on low heat for 45min.',
+            ],
+            [
+                'title' => 'Mutton Rezala',
+                'ingredients' => ['mutton', 'yogurt', 'onion', 'garlic', 'ginger', 'poppy seed paste', 'cashew paste', 'ghee', 'cardamom', 'cinnamon', 'rose water'],
+                'instructions' => 'Slow-cook mutton with yogurt and spice paste for 1hr. Add ghee and rose water. Serve with naan or rice.',
+            ],
+            [
+                'title' => 'Shorshe Ilish (Hilsa in Mustard)',
+                'ingredients' => ['hilsa fish', 'mustard paste', 'turmeric', 'green chili', 'mustard oil', 'salt'],
+                'instructions' => 'Marinate fish with turmeric and salt. Cook in mustard paste and oil for 10min. Garnish with green chili.',
+            ],
+            [
+                'title' => 'Bangladeshi Beef Curry',
+                'ingredients' => ['beef', 'onion', 'garlic', 'ginger', 'panch phoron', 'turmeric', 'chili powder', 'cumin', 'coriander', 'potato', 'oil', 'salt'],
+                'instructions' => 'Fry whole spices in oil. Add onion paste and cook until golden. Add beef and spices, cook 20min. Add potatoes, cook until tender.',
+            ],
+            [
+                'title' => 'Chicken Khichuri',
+                'ingredients' => ['chicken', 'rice', 'moong dal', 'onion', 'garlic', 'ginger', 'turmeric', 'ghee', 'cumin', 'cinnamon', 'cardamom', 'potato'],
+                'instructions' => 'Fry whole spices and onion in ghee. Add chicken, cook 10min. Add rice, dal, water. Cook until soft. Perfect for rainy days!',
+            ],
+            [
+                'title' => 'Beef Chaap (Eid Special)',
+                'ingredients' => ['beef steak cut', 'yogurt', 'onion', 'garlic', 'ginger', 'poppy seed', 'coconut', 'ghee', 'cardamom', 'cinnamon', 'nutmeg', 'rose water'],
+                'instructions' => 'Tenderize beef. Marinate in yogurt and spice paste overnight. Slow-fry in ghee until caramelized. A must for Eid!',
+            ],
+            [
+                'title' => 'Daal (Bengali Lentils)',
+                'ingredients' => ['masoor dal', 'onion', 'garlic', 'turmeric', 'cumin', 'ghee', 'green chili', 'salt'],
+                'instructions' => 'Boil lentils with turmeric until soft. Temper with fried onion, garlic, and cumin in ghee. Daily comfort food.',
+            ],
+        ];
+
+        return $recipes[array_rand($recipes)];
     }
 
     private function createSupportTicket(array $args): array

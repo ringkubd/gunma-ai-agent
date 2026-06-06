@@ -15,16 +15,23 @@ class QdrantService
 {
     private array $collections;
 
+    private string $collectionPrefix;
+
     public function __construct(
         private readonly string           $qdrantUrl,
         private readonly EmbeddingService $embeddingService,
     ) {
-        $prefix = config('gunma-agent.qdrant_collection_prefix', '');
+        $this->collectionPrefix = config('gunma-agent.qdrant_collection_prefix', '');
         $raw = config('gunma-agent.qdrant_collections', []);
         $this->collections = [];
         foreach ($raw as $key => $name) {
-            $this->collections[$key] = $prefix . $name;
+            $this->collections[$key] = $this->collectionPrefix . $name;
         }
+    }
+
+    private function prefixed(string $collection): string
+    {
+        return $this->collectionPrefix . $collection;
     }
 
     /* ── Product Search (OpenAI embeddings, 1536d) ─────────────── */
@@ -162,8 +169,10 @@ class QdrantService
     {
         if (empty($points)) return;
 
+        $endpoint = "{$this->qdrantUrl}/collections/{$this->prefixed($collection)}/points";
+
         $response = Http::timeout(30)
-            ->put("{$this->qdrantUrl}/collections/{$collection}/points", [
+            ->put($endpoint, [
                 'points' => $points,
             ]);
 
@@ -261,7 +270,7 @@ class QdrantService
     {
         try {
             $response = Http::timeout(15)
-                ->post("{$this->qdrantUrl}/collections/{$collection}/points/search", [
+                ->post("{$this->qdrantUrl}/collections/{$this->prefixed($collection)}/points/search", [
                     'vector'       => $vector,
                     'limit'        => $limit,
                     'with_payload' => true,
@@ -288,7 +297,7 @@ class QdrantService
     {
         try {
             $response = Http::timeout(15)
-                ->post("{$this->qdrantUrl}/collections/{$collection}/points/scroll", [
+                ->post("{$this->qdrantUrl}/collections/{$this->prefixed($collection)}/points/scroll", [
                     'filter'       => $filter,
                     'limit'        => $limit,
                     'with_payload' => true,

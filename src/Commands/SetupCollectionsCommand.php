@@ -15,17 +15,19 @@ class SetupCollectionsCommand extends Command
     public function handle()
     {
         $url = config('gunma-agent.qdrant_url');
+        $prefix = config('gunma-agent.qdrant_collection_prefix', '');
         $collections = config('gunma-agent.qdrant_collections');
 
         foreach ($collections as $key => $name) {
-            $this->info("Creating collection: {$name}...");
+            $prefixedName = $prefix . $name;
+            $this->info("Creating collection: {$prefixedName}...");
             
             // Determine vector size
             // OpenAI (products, cache, history) = 1536
             // Ollama (recipes, kb, memories) = 768
             $size = in_array($key, ['products', 'cache', 'history']) ? 1536 : 768;
 
-            $response = Http::put("{$url}/collections/{$name}", [
+            $response = Http::put("{$url}/collections/{$prefixedName}", [
                 'vectors' => [
                     'size' => $size,
                     'distance' => 'Cosine',

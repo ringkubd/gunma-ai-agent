@@ -54,7 +54,7 @@ class AgentOrchestrator
             $parts[] = implode("\n", $lines);
         }
 
-        $parts[] = "## PRODUCT CARD FORMAT\nWhen recommending specific products, use:\n:::product[id|title|price|image_url|slug]:::\n\nFor recipe suggestions, end with:\n**[🛒 Add ALL Ingredients to Cart]({$this->websiteUrl}/cart/add_bulk?ids=[id1,id2...])**";
+        $parts[] = "## PRODUCT FORMAT\nWhen listing products, use a simple text list like:\n1. Product Name - ¥Price (Stock: X)\n2. Product Name - ¥Price (Stock: X)\n\nFor recipe suggestions, end with:\n**[🛒 Add ALL Ingredients to Cart]({$this->websiteUrl}/cart/add_bulk?ids=[id1,id2...])**\n\nIMPORTANT: Do NOT use product card format (:::product[...]:::) — use plain text lists only.";
 
         return implode("\n\n", $parts);
     }

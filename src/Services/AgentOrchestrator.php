@@ -88,7 +88,7 @@ class AgentOrchestrator
             $parts[] = implode("\n", $lines);
         }
 
-        $parts[] = "## PRODUCT FORMAT\nWhen listing products, use a simple text list like:\n1. Product Name - ¥Price (Stock: X)\n2. Product Name - ¥Price (Stock: X)\n\nFor recipe suggestions, end with:\n**[🛒 Add ALL Ingredients to Cart]({$this->websiteUrl}/cart/add_bulk?ids=[id1,id2...])**\n\nIMPORTANT: Do NOT use product card format (:::product[...]:::) — use plain text lists only.";
+        $parts[] = "## PRODUCT FORMAT\nWhen listing products, use numbered list WITHOUT stock quantity:\n1. Product Name - ¥Price\n2. Product Name - ¥Price\n\nAfter every product list, ALWAYS add:\nJust reply with the number to add to cart, say **add all** for everything, or I can add items for you!\n\nFor recipe ideas, end with:\n**[🛒 Add ALL Ingredients to Cart]({$this->websiteUrl}/cart/add_bulk?ids=[id1,id2...])**\n\nIMPORTANT: Never show stock quantity unless the user specifically asks.";
 
         return implode("\n\n", $parts);
     }

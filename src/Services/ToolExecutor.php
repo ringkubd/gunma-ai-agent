@@ -35,6 +35,7 @@ class ToolExecutor
             'get_order_tracking'             => $this->getOrderTracking($args),
             'get_customer_info'              => $this->getCustomerInfo(),
             'add_item_to_cart'               => $this->addItemToCart($args),
+            'bulk_add_to_cart'               => $this->bulkAddToCart($args),
             'get_featured_recipe'            => $this->getFeaturedRecipe(),
             'create_support_ticket'          => $this->createSupportTicket($args),
             'check_delivery_time'            => $this->checkDeliveryTime($args),
@@ -274,6 +275,78 @@ class ToolExecutor
             'message' => "Added {$quantity}x {$product->title} to cart.",
             'action' => 'redirect',
             'url' => config('gunma-agent.website_url') . '/checkout',
+        ];
+    }
+
+    private function bulkAddToCart(array $args): array
+    {
+        $productIds = $args['product_ids'] ?? [];
+        if (empty($productIds)) return ['error' => 'Please provide product_ids array.'];
+
+        $customer = auth('customer')->user();
+        $productModel = $this->getModelClass('product', \App\Models\Product::class);
+        $cartModel = $this->getModelClass('cart', \App\Models\Cart::class);
+        if (!$productModel) return ['error' => 'Product system unavailable.'];
+
+        $added = [];
+        $skipped = [];
+        $errors = [];
+
+        foreach ($productIds as $pid) {
+            try {
+                $product = $productModel::with('latestStock')->find($pid);
+                if (!$product) {
+                    $skipped[] = "Product #{$pid} not found";
+                    continue;
+                }
+
+                $stock = $product->latestStock;
+                $available = $stock ? (int) $stock->available_quantity : 0;
+                if ($available < 1) {
+                    $skipped[] = "{$product->title} is out of stock";
+                    continue;
+                }
+
+                if ($customer && $cartModel) {
+                    $existing = $cartModel::where('product_id', $pid)->where('customer_id', $customer->id)->first();
+                    if ($existing) {
+                        if ($existing->quantity < $available) {
+                            $existing->increment('quantity');
+                            $added[] = "{$product->title} (qty: {$existing->quantity})";
+                        } else {
+                            $skipped[] = "{$product->title} already at max stock";
+                        }
+                    } else {
+                        $price = (float) ($product->online_price ?? 0);
+                        if (!empty($product->discount)) $price -= (float) $product->discount;
+                        $cartModel::create([
+                            'product_id' => $pid,
+                            'customer_id' => $customer->id,
+                            'quantity' => 1,
+                            'item_price' => $price,
+                            'total_amount' => $price,
+                        ]);
+                        $added[] = $product->title;
+                    }
+                } else {
+                    $added[] = $product->title;
+                }
+            } catch (\Exception $e) {
+                $errors[] = "Failed to add #{$pid}: {$e->getMessage()}";
+            }
+        }
+
+        $msg = count($added) . ' items added to cart.';
+        if (!empty($skipped)) $msg .= ' ' . count($skipped) . ' skipped.';
+        if (!empty($errors)) $msg .= ' ' . count($errors) . ' errors.';
+
+        return [
+            'status' => 'success',
+            'message' => $msg,
+            'added' => $added,
+            'skipped' => $skipped,
+            'errors' => $errors,
+            'cart_url' => config('gunma-agent.website_url') . '/checkout',
         ];
     }
 
@@ -953,7 +1026,7 @@ class ToolExecutor
                 'type' => 'function',
                 'function' => [
                     'name' => 'add_item_to_cart',
-                    'description' => 'Add a product to the user cart. Checks stock and existing items before adding.',
+                    'description' => 'Add a single product to the user cart. Checks stock and existing items before adding.',
                     'parameters' => [
                         'type' => 'object',
                         'properties' => [
@@ -961,6 +1034,24 @@ class ToolExecutor
                             'quantity' => ['type' => 'integer', 'description' => 'Quantity (default 1).'],
                         ],
                         'required' => ['product_id'],
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'bulk_add_to_cart',
+                    'description' => 'Add multiple products to cart at once. Use when user says "add all", "add everything", or wants to add multiple items.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'product_ids' => [
+                                'type' => 'array',
+                                'items' => ['type' => 'integer'],
+                                'description' => 'Array of product IDs to add to cart.',
+                            ],
+                        ],
+                        'required' => ['product_ids'],
                     ],
                 ],
             ],

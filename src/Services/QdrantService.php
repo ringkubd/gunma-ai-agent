@@ -133,11 +133,6 @@ class QdrantService
             return [];
         }
     }
-    {
-        $vector = $this->embeddingService->openaiEmbed($query);
-
-        return $this->vectorSearch($this->collections['products'], $vector, $limit);
-    }
 
     /* ── Recipe Search (Ollama embeddings, 768d) ───────────────── */
 

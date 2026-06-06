@@ -43,7 +43,7 @@ class SyncDataToQdrantCommand extends Command
 
         $this->info('Syncing products...');
         $productModel::where('status', 'Active')
-            ->where('is_online_available', 1)
+            ->where('is_online_available', 'Yes')
             ->with(['latestStock', 'images'])
             ->chunk(100, function ($products) {
                 foreach ($products as $product) {

@@ -326,7 +326,7 @@ class ToolExecutor
         if (!$productModel) return [];
 
         return $productModel::where('status', 'Active')
-            ->where('is_online_available', 1)
+            ->where('is_online_available', 'Yes')
             ->with(['latestStock', 'images'])
             ->latest()
             ->limit(min((int) ($args['limit'] ?? 5), 20))
@@ -472,7 +472,7 @@ class ToolExecutor
         if (!$productModel) return ['error' => 'Product system unavailable.'];
 
         $query = $productModel::where('status', 'Active')
-            ->where('is_online_available', 1)
+            ->where('is_online_available', 'Yes')
             ->with(['latestStock', 'images', 'categories']);
 
         // Category filter

@@ -91,7 +91,7 @@ class QdrantService
             if (!class_exists($productModel)) return [];
 
             $products = $productModel::where('status', 'Active')
-                ->where('is_online_available', 1)
+                ->where('is_online_available', 'Yes')
                 ->where(function ($q) use ($query) {
                     $q->where('title', 'LIKE', "%{$query}%")
                       ->orWhere('short_description', 'LIKE', "%{$query}%")

@@ -10,18 +10,9 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 
-/**
- * Main AI Agent Orchestrator — ported from agent_server.js.
- *
- * Flow:
- *   1. Greeting Interceptor (zero-cost)
- *   2. KB Fast Check (Qdrant, score > 0.94 = instant)
- *   3. OpenAI Chat Completion with tool calling loop
- *   4. Persist to MySQL + Redis cache
- */
 class AgentOrchestrator
 {
-    private string $systemPrompt;
+    private string $baseSystemPrompt;
 
     public function __construct(
         private readonly ToolExecutor        $toolExecutor,
@@ -40,46 +31,108 @@ class AgentOrchestrator
         $styleInstruction = $this->promptService->getStyleInstruction();
         $url = rtrim($this->websiteUrl, '/');
 
-        $this->systemPrompt = $dbPrompt . "\n\n---\nSTYLE: {$styleInstruction}\n\nWEBSITE: {$url}\n\nUse this format for product recommendations:\n:::product[id|title|price|image_url|slug]:::\nFor recipes, end with:\n**[🛒 Add ALL Ingredients to Cart]({$url}/cart/add_bulk?ids=[id1,id2...])**";
+        $this->baseSystemPrompt = $dbPrompt . "\n\n---\nSTYLE: {$styleInstruction}\n\nWEBSITE: {$url}";
+    }
+
+    /* ── Build context-aware system prompt with user context ───── */
+
+    private function buildSystemPrompt(ChatSession $session): string
+    {
+        $ctx = $this->getUserContext($session);
+        $parts = [$this->baseSystemPrompt];
+
+        if ($ctx) {
+            $lines = [];
+            $lines[] = "## CURRENT USER CONTEXT";
+            if ($ctx['name']) $lines[] = "- Name: {$ctx['name']}";
+            if ($ctx['email']) $lines[] = "- Email: {$ctx['email']}";
+            if ($ctx['is_guest'] === false) $lines[] = "- Logged in: yes";
+            else $lines[] = "- Logged in: no (guest)";
+            if ($ctx['previous_orders'] > 0) $lines[] = "- Previous orders: {$ctx['previous_orders']}";
+            if ($ctx['points'] > 0) $lines[] = "- Loyalty points: {$ctx['points']}";
+            if ($ctx['cart_count'] > 0) $lines[] = "- Items in cart: {$ctx['cart_count']} (check cart before suggesting products)";
+            $parts[] = implode("\n", $lines);
+        }
+
+        $parts[] = "## PRODUCT CARD FORMAT\nWhen recommending specific products, use:\n:::product[id|title|price|image_url|slug]:::\n\nFor recipe suggestions, end with:\n**[🛒 Add ALL Ingredients to Cart]({$this->websiteUrl}/cart/add_bulk?ids=[id1,id2...])**";
+
+        return implode("\n\n", $parts);
+    }
+
+    private function getUserContext(ChatSession $session): array
+    {
+        $ctx = [
+            'name' => $session->resolved_name,
+            'email' => $session->resolved_email,
+            'is_guest' => true,
+            'previous_orders' => 0,
+            'points' => 0,
+            'cart_count' => 0,
+        ];
+
+        if (!$session->customer_id) return $ctx;
+
+        $ctx['is_guest'] = false;
+
+        try {
+            $customerModel = config('gunma-agent.models.customer');
+            if ($customerModel && class_exists($customerModel)) {
+                $customer = $customerModel::find($session->customer_id);
+                if ($customer) {
+                    $ctx['name'] = $ctx['name'] ?? $customer->name;
+                    $ctx['email'] = $ctx['email'] ?? $customer->email;
+                    $ctx['points'] = (int) ($customer->available_point ?? 0);
+
+                    $orderModel = config('gunma-agent.models.order');
+                    if ($orderModel && class_exists($orderModel)) {
+                        $ctx['previous_orders'] = $orderModel::where('customer_id', $customer->id)->count();
+                    }
+
+                    $cartModel = config('gunma-agent.models.cart');
+                    if ($cartModel && class_exists($cartModel)) {
+                        $ctx['cart_count'] = $cartModel::where('customer_id', $customer->id)->count();
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::warning('[Agent] User context fetch failed', ['error' => $e->getMessage()]);
+        }
+
+        return $ctx;
     }
 
     /* ── Main Entry Point ──────────────────────────────────────── */
 
     public function chat(ChatSession $session, string $userMessage): string
     {
-        // 0. Persist User Message immediately for real-time visibility
         $this->persistUserMessage($session, $userMessage);
 
-        // Check if AI is disabled for this session
-        if (!$session->is_ai_enabled) {
-            return "Wait for agent..."; 
-        }
+        if (!$session->is_ai_enabled) return "Wait for agent...";
 
-        // 1. GREETING INTERCEPTOR: Zero-cost instant reply
-        $greeting = $this->greetingInterceptor->intercept($userMessage);
+        // 1. Smart greeting interceptor (with user context)
+        $ctx = $this->getUserContext($session);
+        $greeting = $this->greetingInterceptor->intercept($userMessage, $ctx);
         if ($greeting !== null) {
             Log::info('[Agent] Greeting shortcut', ['query' => $userMessage]);
             $this->persistMessages($session, $userMessage, $greeting, 'greeting');
             return $greeting;
         }
 
-        // 2. SEMANTIC CACHE
+        // 2. Semantic cache
         $cachedResponse = $this->qdrantService->getSemanticCache($userMessage);
         if ($cachedResponse !== null) {
-            Log::info('[Agent] Semantic cache hit', ['query' => $userMessage]);
+            Log::info('[Agent] Semantic cache hit');
             $this->persistMessages($session, $userMessage, $cachedResponse, 'semantic_cache');
             return $cachedResponse;
         }
 
-        // 3. KB FAST CHECK: High-confidence instant reply
+        // 3. KB fast check
         try {
             $kbResults = $this->qdrantService->searchSupportKB($userMessage);
-            if (! empty($kbResults) && ($kbResults[0]['score'] ?? 0) > 0.94) {
+            if (!empty($kbResults) && ($kbResults[0]['score'] ?? 0) > 0.94) {
                 $answer = $kbResults[0]['payload']['answer'] ?? $kbResults[0]['payload']['english']['a'] ?? null;
                 if ($answer) {
-                    Log::info('[Agent] KB fast reply', [
-                        'score' => $kbResults[0]['score'],
-                    ]);
+                    Log::info('[Agent] KB fast reply', ['score' => $kbResults[0]['score']]);
                     $this->persistMessages($session, $userMessage, $answer, 'kb_fast');
                     return $answer;
                 }
@@ -88,63 +141,55 @@ class AgentOrchestrator
             Log::warning('[Agent] KB fast check failed', ['error' => $e->getMessage()]);
         }
 
-        // 4. FULL OPENAI AGENT LOOP
-        return $this->runAgentLoop($session, $userMessage);
+        // 4. Full agent loop
+        $result = $this->runAgentLoop($session, $userMessage);
+
+        // Quality check: if response is empty, retry once
+        if (empty(trim($result)) || strlen(trim($result)) < 5) {
+            Log::warning('[Agent] Empty response detected, retrying');
+            $result = $this->runAgentLoop($session, $userMessage);
+        }
+
+        return $result;
     }
 
-    /**
-     * Process a user message and stream the response via SSE.
-     * Yields SSE-formatted strings.
-     *
-     * @return \Generator<string>
-     */
     public function chatStream(ChatSession $session, string $userMessage): \Generator
     {
-        // 0. Persist User Message immediately for real-time visibility
         $this->persistUserMessage($session, $userMessage);
 
-        // Check if AI is disabled for this session
         if (!$session->is_ai_enabled) {
             yield $this->sseEvent('status', ['message' => 'Waiting for human agent...']);
             yield $this->sseEvent('done', []);
             return;
         }
 
-        // 1. GREETING INTERCEPTOR
-        $greeting = $this->greetingInterceptor->intercept($userMessage);
+        // 1. Smart greeting
+        $ctx = $this->getUserContext($session);
+        $greeting = $this->greetingInterceptor->intercept($userMessage, $ctx);
         if ($greeting !== null) {
             $msg = $this->persistMessages($session, $userMessage, $greeting, 'greeting');
-            yield $this->sseEvent('message', [
-                'id'      => $msg->id,
-                'content' => $greeting
-            ]);
+            yield $this->sseEvent('message', ['id' => $msg->id, 'content' => $greeting]);
             yield $this->sseEvent('done', []);
             return;
         }
 
-        // 2. SEMANTIC CACHE
+        // 2. Semantic cache
         $cachedResponse = $this->qdrantService->getSemanticCache($userMessage);
         if ($cachedResponse !== null) {
             $msg = $this->persistMessages($session, $userMessage, $cachedResponse, 'semantic_cache');
-            yield $this->sseEvent('message', [
-                'id'      => $msg->id,
-                'content' => $cachedResponse
-            ]);
+            yield $this->sseEvent('message', ['id' => $msg->id, 'content' => $cachedResponse]);
             yield $this->sseEvent('done', []);
             return;
         }
 
-        // 3. KB FAST CHECK
+        // 3. KB fast check
         try {
             $kbResults = $this->qdrantService->searchSupportKB($userMessage);
-            if (! empty($kbResults) && ($kbResults[0]['score'] ?? 0) > 0.94) {
+            if (!empty($kbResults) && ($kbResults[0]['score'] ?? 0) > 0.94) {
                 $answer = $kbResults[0]['payload']['answer'] ?? $kbResults[0]['payload']['english']['a'] ?? null;
                 if ($answer) {
                     $msg = $this->persistMessages($session, $userMessage, $answer, 'kb_fast');
-                    yield $this->sseEvent('message', [
-                        'id'      => $msg->id,
-                        'content' => $answer
-                    ]);
+                    yield $this->sseEvent('message', ['id' => $msg->id, 'content' => $answer]);
                     yield $this->sseEvent('done', []);
                     return;
                 }
@@ -153,160 +198,31 @@ class AgentOrchestrator
             Log::warning('[Agent] KB fast check failed', ['error' => $e->getMessage()]);
         }
 
-        // 3. FULL OPENAI AGENT LOOP WITH STREAMING TOOL EVENTS
-        $messages = $this->buildContextWindow($session, $userMessage);
-        $url = rtrim($this->openaiBaseUrl, '/') . '/chat/completions';
-
-        yield $this->sseEvent('thinking', ['status' => 'Processing your request...']);
-
-        $keepRunning = true;
-        $finalContent = '';
-        $totalTokens = 0;
-        $iterations = 0;
-        $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
-        $usedFallback = false;
-
-        while ($keepRunning && $iterations < $maxIterations) {
-            $iterations++;
-            try {
-                if ($usedFallback) {
-                    yield $this->sseEvent('tool_call', [
-                        'name' => 'ollama_fallback',
-                        'args' => ['model' => $this->ollamaChatModel],
-                    ]);
-
-                    $reply = $this->callOllama($messages);
-                    if ($reply) {
-                        $finalContent = $reply;
-                        yield $this->sseEvent('message', ['content' => $finalContent]);
-                    } else {
-                        $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
-                        yield $this->sseEvent('message', ['content' => $finalContent]);
-                    }
-                    $keepRunning = false;
-                    continue;
-                }
-
-                Log::debug('[Agent] Calling OpenAI', ['model' => $this->openaiModel, 'url' => $url, 'iteration' => $iterations]);
-                $response = Http::withToken($this->openaiKey)
-                    ->timeout(60)
-                    ->post($url, [
-                        'model'       => trim($this->openaiModel),
-                        'messages'    => $messages,
-                        'tools'       => ToolExecutor::getToolDefinitions(),
-                        'tool_choice' => 'auto',
-                    ]);
-
-                if (! $response->ok()) {
-                    Log::warning('[Agent] OpenAI API error, falling back to Ollama', ['status' => $response->status(), 'body' => $response->body()]);
-                    yield $this->sseEvent('status', ['message' => 'OpenAI unavailable, switching to local AI...']);
-                    $usedFallback = true;
-                    continue;
-                }
-
-                $data     = $response->json();
-                $message  = $data['choices'][0]['message'] ?? [];
-                $usage    = $data['usage'] ?? [];
-                $totalTokens += ($usage['total_tokens'] ?? 0);
-
-                $messages[] = $message;
-
-                // Handle tool calls
-                if (! empty($message['tool_calls'])) {
-                    foreach ($message['tool_calls'] as $toolCall) {
-                        $fnName = $toolCall['function']['name'] ?? '';
-                        $fnArgs = json_decode($toolCall['function']['arguments'] ?? '{}', true);
-
-                        yield $this->sseEvent('tool_call', [
-                            'name' => $fnName,
-                            'args' => $fnArgs,
-                        ]);
-
-                        // Broadcast to admin dashboard
-                        event(new \Anwar\GunmaAgent\Events\ToolExecuting($session->id, "Executing tool: {$fnName}"));
-
-                        $result = $this->toolExecutor->execute($fnName, $fnArgs);
-
-                        $messages[] = [
-                            'tool_call_id' => $toolCall['id'],
-                            'role'         => 'tool',
-                            'name'         => $fnName,
-                            'content'      => json_encode($result),
-                        ];
-
-                        yield $this->sseEvent('tool_result', [
-                            'name'   => $fnName,
-                            'status' => 'completed',
-                            'result' => $result,
-                        ]);
-                    }
-                    // Loop continues — let agent reason over tool output
-                } else {
-                    $finalContent = $message['content'] ?? '';
-                    $keepRunning = false;
-                }
-            } catch (\Exception $e) {
-                Log::error('[Agent] Agent loop error, falling back to Ollama', ['error' => $e->getMessage()]);
-                if (! $usedFallback) {
-                    yield $this->sseEvent('status', ['message' => 'OpenAI error, switching to local AI...']);
-                    $usedFallback = true;
-                    continue;
-                }
-                $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
-                yield $this->sseEvent('message', ['content' => $finalContent]);
-                $keepRunning = false;
-            }
-        }
-
-        // Persist first to get the real ID
-        $savedMessage = $this->persistMessages($session, $userMessage, $finalContent, $this->openaiModel, $totalTokens);
-
-        // Yield final message with the real ID
-        yield $this->sseEvent('message', [
-            'id'      => $savedMessage->id,
-            'content' => $finalContent
-        ]);
-
-        // Index memory for future RAG
-        $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
-
-        // Update Semantic Cache (only if successful)
-        if ($finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
-            $this->qdrantService->setSemanticCache($userMessage, $finalContent);
-        }
-
-        yield $this->sseEvent('done', ['tokens' => $totalTokens]);
+        // 4. Full agent loop
+        yield from $this->runAgentLoopStream($session, $userMessage);
     }
 
-    /* ── Private: Synchronous Agent Loop ───────────────────────── */
+    /* ── Sync Agent Loop ───────────────────────────────────────── */
 
     private function runAgentLoop(ChatSession $session, string $userMessage): string
     {
-        $messages    = $this->buildContextWindow($session, $userMessage);
-        $url         = rtrim($this->openaiBaseUrl, '/') . '/chat/completions';
-        $keepRunning = true;
+        $messages = $this->buildContextWindow($session, $userMessage);
+        $url = rtrim($this->openaiBaseUrl, '/') . '/chat/completions';
         $finalContent = '';
         $totalTokens = 0;
         $iterations = 0;
         $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
         $usedFallback = false;
 
-        while ($keepRunning && $iterations < $maxIterations) {
+        while ($iterations < $maxIterations) {
             $iterations++;
             try {
                 if ($usedFallback) {
-                    // Already fell back to Ollama — no tools available, just generate
                     $reply = $this->callOllama($messages);
-                    if ($reply) {
-                        $finalContent = $reply;
-                    } else {
-                        $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
-                    }
-                    $keepRunning = false;
-                    continue;
+                    $finalContent = $reply ?? "I'm sorry, I couldn't process that. Would you like to speak with a human agent?";
+                    break;
                 }
 
-                Log::debug('[Agent] Calling OpenAI (sync)', ['model' => $this->openaiModel, 'iteration' => $iterations]);
                 $response = Http::withToken($this->openaiKey)
                     ->timeout(60)
                     ->post($url, [
@@ -316,20 +232,18 @@ class AgentOrchestrator
                         'tool_choice' => 'auto',
                     ]);
 
-                if (! $response->ok()) {
-                    Log::warning('[Agent] OpenAI error, falling back to Ollama', ['status' => $response->status(), 'body' => $response->body()]);
+                if (!$response->ok()) {
+                    Log::warning('[Agent] OpenAI error, fallback to Ollama', ['status' => $response->status()]);
                     $usedFallback = true;
                     continue;
                 }
 
-                $data     = $response->json();
-                $message  = $data['choices'][0]['message'] ?? [];
-                $usage    = $data['usage'] ?? [];
-                $totalTokens += ($usage['total_tokens'] ?? 0);
-
+                $data = $response->json();
+                $message = $data['choices'][0]['message'] ?? [];
+                $totalTokens += ($data['usage']['total_tokens'] ?? 0);
                 $messages[] = $message;
 
-                if (! empty($message['tool_calls'])) {
+                if (!empty($message['tool_calls'])) {
                     foreach ($message['tool_calls'] as $toolCall) {
                         $fnName = $toolCall['function']['name'] ?? '';
                         $fnArgs = json_decode($toolCall['function']['arguments'] ?? '{}', true);
@@ -337,32 +251,25 @@ class AgentOrchestrator
 
                         $messages[] = [
                             'tool_call_id' => $toolCall['id'],
-                            'role'         => 'tool',
-                            'name'         => $fnName,
-                            'content'      => json_encode($result),
+                            'role' => 'tool',
+                            'name' => $fnName,
+                            'content' => json_encode($result),
                         ];
                     }
                 } else {
                     $finalContent = $message['content'] ?? '';
-                    $keepRunning  = false;
+                    break;
                 }
             } catch (\Exception $e) {
-                Log::error('[Agent] Loop error, falling back to Ollama', ['error' => $e->getMessage()]);
-                if (! $usedFallback) {
-                    $usedFallback = true;
-                    continue;
-                }
+                Log::error('[Agent] Loop error, fallback to Ollama', ['error' => $e->getMessage()]);
+                if (!$usedFallback) { $usedFallback = true; continue; }
                 $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
-                $keepRunning  = false;
+                break;
             }
         }
 
         $this->persistMessages($session, $userMessage, $finalContent, $usedFallback ? $this->ollamaChatModel : $this->openaiModel, $totalTokens);
-
-        // Index memory for future RAG
         $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
-
-        // Update Semantic Cache (only if successful)
         if ($finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
             $this->qdrantService->setSemanticCache($userMessage, $finalContent);
         }
@@ -370,13 +277,109 @@ class AgentOrchestrator
         return $finalContent;
     }
 
-    /* ── Private: Ollama Fallback ───────────────────────────────── */
+    /* ── Stream Agent Loop ─────────────────────────────────────── */
+
+    private function runAgentLoopStream(ChatSession $session, string $userMessage): \Generator
+    {
+        $messages = $this->buildContextWindow($session, $userMessage);
+        $url = rtrim($this->openaiBaseUrl, '/') . '/chat/completions';
+
+        yield $this->sseEvent('thinking', ['status' => 'Processing your request...']);
+
+        $finalContent = '';
+        $totalTokens = 0;
+        $iterations = 0;
+        $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
+        $usedFallback = false;
+
+        while ($iterations < $maxIterations) {
+            $iterations++;
+            try {
+                if ($usedFallback) {
+                    yield $this->sseEvent('tool_call', ['name' => 'ollama_fallback', 'args' => ['model' => $this->ollamaChatModel]]);
+                    $reply = $this->callOllama($messages);
+                    $finalContent = $reply ?? "I'm sorry, I couldn't process that. Would you like to speak with a human agent?";
+                    yield $this->sseEvent('message', ['content' => $finalContent]);
+                    break;
+                }
+
+                $response = Http::withToken($this->openaiKey)
+                    ->timeout(60)
+                    ->post($url, [
+                        'model'       => trim($this->openaiModel),
+                        'messages'    => $messages,
+                        'tools'       => ToolExecutor::getToolDefinitions(),
+                        'tool_choice' => 'auto',
+                    ]);
+
+                if (!$response->ok()) {
+                    yield $this->sseEvent('status', ['message' => 'OpenAI unavailable, switching to local AI...']);
+                    $usedFallback = true;
+                    continue;
+                }
+
+                $data = $response->json();
+                $message = $data['choices'][0]['message'] ?? [];
+                $totalTokens += ($data['usage']['total_tokens'] ?? 0);
+                $messages[] = $message;
+
+                if (!empty($message['tool_calls'])) {
+                    foreach ($message['tool_calls'] as $toolCall) {
+                        $fnName = $toolCall['function']['name'] ?? '';
+                        $fnArgs = json_decode($toolCall['function']['arguments'] ?? '{}', true);
+
+                        yield $this->sseEvent('tool_call', ['name' => $fnName, 'args' => $fnArgs]);
+                        event(new \Anwar\GunmaAgent\Events\ToolExecuting($session->id, "Executing tool: {$fnName}"));
+
+                        $result = $this->toolExecutor->execute($fnName, $fnArgs);
+
+                        $messages[] = [
+                            'tool_call_id' => $toolCall['id'],
+                            'role' => 'tool',
+                            'name' => $fnName,
+                            'content' => json_encode($result),
+                        ];
+
+                        yield $this->sseEvent('tool_result', ['name' => $fnName, 'status' => 'completed', 'result' => $result]);
+                    }
+                } else {
+                    $finalContent = $message['content'] ?? '';
+                    break;
+                }
+            } catch (\Exception $e) {
+                Log::error('[Agent] Stream loop error', ['error' => $e->getMessage()]);
+                if (!$usedFallback) {
+                    yield $this->sseEvent('status', ['message' => 'OpenAI error, switching to local AI...']);
+                    $usedFallback = true;
+                    continue;
+                }
+                $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
+                yield $this->sseEvent('message', ['content' => $finalContent]);
+                break;
+            }
+        }
+
+        if (empty(trim($finalContent)) || strlen(trim($finalContent)) < 5) {
+            $finalContent = 'I apologize, but I wasn\'t able to generate a proper response. Could you rephrase your question or would you like me to connect you with a human agent?';
+        }
+
+        $savedMessage = $this->persistMessages($session, $userMessage, $finalContent, $usedFallback ? $this->ollamaChatModel : $this->openaiModel, $totalTokens);
+        yield $this->sseEvent('message', ['id' => $savedMessage->id, 'content' => $finalContent]);
+
+        $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
+        if ($finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
+            $this->qdrantService->setSemanticCache($userMessage, $finalContent);
+        }
+
+        yield $this->sseEvent('done', ['tokens' => $totalTokens]);
+    }
+
+    /* ── Ollama Fallback ───────────────────────────────────────── */
 
     private function callOllama(array $messages): ?string
     {
         try {
             $url = rtrim($this->ollamaUrl, '/') . '/api/chat';
-
             $ollamaMessages = [];
             foreach ($messages as $msg) {
                 $role = $msg['role'] ?? '';
@@ -385,19 +388,15 @@ class AgentOrchestrator
                 }
             }
 
-            $response = Http::timeout(120)
-                ->post($url, [
-                    'model'    => $this->ollamaChatModel,
-                    'messages' => $ollamaMessages,
-                    'stream'   => false,
-                    'options'  => [
-                        'temperature' => 0.7,
-                        'num_predict' => 1024,
-                    ],
-                ]);
+            $response = Http::timeout(120)->post($url, [
+                'model' => $this->ollamaChatModel,
+                'messages' => $ollamaMessages,
+                'stream' => false,
+                'options' => ['temperature' => 0.7, 'num_predict' => 1024],
+            ]);
 
-            if (! $response->ok()) {
-                Log::error('[Agent] Ollama fallback error', ['status' => $response->status(), 'body' => $response->body()]);
+            if (!$response->ok()) {
+                Log::error('[Agent] Ollama fallback error', ['status' => $response->status()]);
                 return null;
             }
 
@@ -405,13 +404,8 @@ class AgentOrchestrator
             $message = $data['message'] ?? [];
             $content = $message['content'] ?? '';
 
-            // Some Ollama models return content in a separate 'thinking' field
-            if (empty($content) && ! empty($message['thinking'])) {
+            if (empty($content) && !empty($message['thinking'])) {
                 $content = $message['thinking'];
-            }
-
-            if (! empty($content)) {
-                Log::info('[Agent] Ollama fallback succeeded', ['model' => $this->ollamaChatModel]);
             }
 
             return $content ?: null;
@@ -421,23 +415,49 @@ class AgentOrchestrator
         }
     }
 
-    /* ── Private: Build Context Window ─────────────────────────── */
+    /* ── Build Context Window ──────────────────────────────────── */
 
     private function buildContextWindow(ChatSession $session, string $userMessage): array
     {
+        $systemPrompt = $this->buildSystemPrompt($session);
+
         $messages = [
-            ['role' => 'system', 'content' => $this->systemPrompt],
+            ['role' => 'system', 'content' => $systemPrompt],
         ];
 
-        // Load recent history from Redis cache first, fallback to MySQL
         $history = $this->getRecentHistory($session);
-        foreach ($history as $msg) {
-            $messages[] = $msg;
+
+        // Summarize old context if conversation is long
+        if (count($history) > ($this->maxHistory * 2)) {
+            $recentCount = $this->maxHistory;
+            $oldMessages = array_slice($history, 0, count($history) - $recentCount);
+            $recentMessages = array_slice($history, -$recentCount);
+
+            $summary = $this->summarizeContext($oldMessages);
+            if ($summary) {
+                $messages[] = ['role' => 'system', 'content' => "[Earlier conversation summary]: {$summary}"];
+            }
+            $messages = array_merge($messages, $recentMessages);
+        } else {
+            $messages = array_merge($messages, $history);
         }
 
         $messages[] = ['role' => 'user', 'content' => $userMessage];
 
         return $messages;
+    }
+
+    private function summarizeContext(array $messages): string
+    {
+        $topics = [];
+        foreach ($messages as $msg) {
+            $content = $msg['content'] ?? '';
+            if (strlen($content) > 150) {
+                $content = substr($content, 0, 150) . '...';
+            }
+            $topics[] = "{$msg['role']}: {$content}";
+        }
+        return implode(' | ', array_slice($topics, -6));
     }
 
     private function getRecentHistory(ChatSession $session): array
@@ -446,44 +466,36 @@ class AgentOrchestrator
 
         try {
             $cached = Redis::lrange($redisKey, -$this->maxHistory, -1);
-            if (! empty($cached)) {
-                return array_map(fn ($json) => json_decode($json, true), $cached);
+            if (!empty($cached)) {
+                return array_map(fn($json) => json_decode($json, true), $cached);
             }
         } catch (\Exception $e) {
-            // Redis unavailable, fall through to MySQL
+            // Redis unavailable, fallback to MySQL
         }
 
-        // Fallback: load from MySQL
         return $session->messages()
             ->whereIn('role', ['user', 'assistant'])
             ->latest()
             ->take($this->maxHistory)
             ->get()
             ->reverse()
-            ->map(fn ($m) => ['role' => $m->role, 'content' => $m->content])
+            ->map(fn($m) => ['role' => $m->role, 'content' => $m->content])
             ->values()
             ->all();
     }
 
-    /* ── Private: Persist Messages ─────────────────────────────── */
+    /* ── Persist Messages ──────────────────────────────────────── */
 
     public function persistUserMessage(ChatSession $session, string $userMessage): ChatMessage
     {
-        // Prevent double persistence in same request life-cycle if needed, 
-        // though typically these entry points are called once.
         $message = ChatMessage::create([
             'session_id' => $session->id,
-            'role'       => 'user',
-            'content'    => $userMessage,
+            'role' => 'user',
+            'content' => $userMessage,
         ]);
 
-        // Broadcast to admin dashboard
         event(new \Anwar\GunmaAgent\Events\MessageBroadcasted($message));
-
-        // Cache in Redis for fast context building
         $this->cacheMessageInRedis($session->id, 'user', $userMessage);
-
-        // Detect sentiment and update priority
         $this->updateSessionPriority($session, $userMessage);
 
         return $message;
@@ -493,21 +505,15 @@ class AgentOrchestrator
     {
         $angryWords = ['bad', 'worst', 'angry', 'terrible', 'scam', 'fraud', 'useless', 'horrible', 'kharap', 'faltu', 'baje', 'rag', 'problem', 'complain'];
         $priority = 0;
-
         foreach ($angryWords as $word) {
-            if (stripos($message, $word) !== false) {
-                $priority += 20;
-            }
+            if (stripos($message, $word) !== false) $priority += 20;
         }
 
         if ($priority > 0) {
             $newScore = min(100, ($session->metadata['priority_score'] ?? 0) + $priority);
             $metadata = $session->metadata ?? [];
             $metadata['priority_score'] = $newScore;
-            
             $session->update(['metadata' => $metadata]);
-
-            // Broadcast to admin
             event(new \Anwar\GunmaAgent\Events\PriorityUpdated($session, $newScore));
         }
     }
@@ -519,21 +525,15 @@ class AgentOrchestrator
         string $model = 'greeting',
         int $tokensUsed = 0,
     ): ChatMessage {
-        // Save assistant message
         $message = ChatMessage::create([
-            'session_id'  => $session->id,
-            'role'        => 'assistant',
-            'content'     => $assistantMessage,
-            'model'       => $model,
+            'session_id' => $session->id,
+            'role' => 'assistant',
+            'content' => $assistantMessage,
+            'model' => $model,
             'tokens_used' => $tokensUsed,
         ]);
 
-        \Illuminate\Support\Facades\Log::info('[AgentOrchestrator] Broadcasting AI response message: ' . $message->id);
-
-        // Broadcast to user and admin dashboard
         event(new \Anwar\GunmaAgent\Events\MessageBroadcasted($message));
-
-        // Cache in Redis for fast context building
         $this->cacheMessageInRedis($session->id, 'assistant', $assistantMessage);
 
         return $message;
@@ -542,18 +542,16 @@ class AgentOrchestrator
     private function cacheMessageInRedis(string $sessionId, string $role, string $content): void
     {
         $redisKey = "gunma:chat:{$sessionId}:messages";
-        $ttl      = config('gunma-agent.session_ttl', 86400);
+        $ttl = config('gunma-agent.session_ttl', 86400);
 
         try {
-            \Illuminate\Support\Facades\Redis::rpush($redisKey, json_encode(['role' => $role, 'content' => $content]));
-            \Illuminate\Support\Facades\Redis::ltrim($redisKey, -($this->maxHistory * 2), -1);
-            \Illuminate\Support\Facades\Redis::expire($redisKey, $ttl);
+            Redis::rpush($redisKey, json_encode(['role' => $role, 'content' => $content]));
+            Redis::ltrim($redisKey, -($this->maxHistory * 2), -1);
+            Redis::expire($redisKey, $ttl);
         } catch (\Exception $e) {
             Log::warning('[Agent] Redis cache failed', ['error' => $e->getMessage()]);
         }
     }
-
-    /* ── Private: SSE Event Helper ─────────────────────────────── */
 
     private function sseEvent(string $event, array $data): string
     {

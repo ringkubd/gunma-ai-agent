@@ -35,7 +35,7 @@ class SetupCollectionsCommand extends Command
             ]);
 
             if ($response->ok()) {
-                $this->info("Successfully created [{$name}].");
+                $this->info("Successfully created [{$prefixedName}].");
             } else {
                 $this->warn("Collection [{$name}] might already exist or failed: " . $response->body());
             }

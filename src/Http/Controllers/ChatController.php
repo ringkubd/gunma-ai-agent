@@ -60,6 +60,14 @@ class ChatController extends Controller
         }
 
         if (! $session) {
+            \Log::info('[ChatController] Creating new chat session', [
+                'visitor_id'  => $validated['visitor_id'],
+                'customer_id' => $customerId,
+                'channel'     => $validated['channel'] ?? 'web',
+                'ip'          => $request->ip(),
+                'user_agent'  => $request->userAgent(),
+            ]);
+
             $session = ChatSession::create([
                 'visitor_id'    => $validated['visitor_id'],
                 'customer_id'   => $customerId,
@@ -68,12 +76,20 @@ class ChatController extends Controller
                 'status'        => 'active',
                 'metadata'      => $validated['metadata'] ?? null,
             ]);
-        } elseif ($customerId && ! $session->customer_id) {
-            // Upgrade anonymous session to authenticated
-            $session->update([
-                'customer_id'   => $customerId,
-                'customer_name' => $customerName ?? $session->customer_name,
+        } else {
+            \Log::info('[ChatController] Reusing existing chat session', [
+                'session_id'  => $session->id,
+                'visitor_id'  => $validated['visitor_id'],
+                'customer_id' => $session->customer_id,
             ]);
+
+            if ($customerId && ! $session->customer_id) {
+                // Upgrade anonymous session to authenticated
+                $session->update([
+                    'customer_id'   => $customerId,
+                    'customer_name' => $customerName ?? $session->customer_name,
+                ]);
+            }
         }
 
         return response()->json([
@@ -531,3 +547,4 @@ class ChatController extends Controller
             'customer_name'     => $name,
         ]);
     }
+}

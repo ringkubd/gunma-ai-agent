@@ -52,7 +52,8 @@ Route::prefix($adminPrefix)
         Route::post('/sessions/{id}/toggle-ai', [ChatController::class, 'toggleAi']);
         Route::post('/sessions/{id}/messages', [ChatController::class, 'sendManualMessage']);
         Route::post('/sessions/{id}/typing', [ChatController::class, 'typing']);
-        
+        Route::post('/link-session', [ChatController::class, 'linkSession']);
+
         // Support Tickets
         Route::get('/tickets', [ChatController::class, 'listTickets']);
         Route::get('/tickets/{id}', [ChatController::class, 'getTicket']);
@@ -66,6 +67,7 @@ Route::prefix(config('gunma-agent.admin_route_prefix', 'api/admin/chat'))
         Route::get('/prompts', [\Anwar\GunmaAgent\Http\Controllers\PromptController::class, 'index']);
         Route::get('/prompts/{key}', [\Anwar\GunmaAgent\Http\Controllers\PromptController::class, 'show']);
         Route::put('/prompts', [\Anwar\GunmaAgent\Http\Controllers\PromptController::class, 'update']);
+        Route::post('/link-session', [\Anwar\GunmaAgent\Http\Controllers\ChatController::class, 'linkSession']);
     });
 
 // Email Webhook (Incoming Support Emails)

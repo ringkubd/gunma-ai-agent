@@ -486,4 +486,48 @@ class ChatController extends Controller
 
         return response()->json(['status' => 'success']);
     }
-}
+
+    /**
+     * Link guest chat session to a registered customer after login.
+     * POST /api/admin/chat/link-session
+     */
+    public function linkSession(Request $request): JsonResponse
+    {
+        $request->validate([
+            'visitor_id'  => 'required|string|max:64',
+            'customer_id' => 'required|integer',
+        ]);
+
+        $customer = null;
+        $model = config('gunma-agent.models.customer');
+        if ($model && class_exists($model)) {
+            $customer = $model::find($request->customer_id);
+        }
+
+        $name  = $customer->name ?? $customer->first_name ?? null;
+        $email = $customer->email ?? null;
+
+        $sessions = ChatSession::where('visitor_id', $request->visitor_id)
+            ->whereNull('customer_id')
+            ->get();
+
+        foreach ($sessions as $session) {
+            $session->update([
+                'customer_id'   => $request->customer_id,
+                'customer_name' => $name ?? $session->customer_name,
+                'customer_email'=> $email ?? $session->customer_email,
+            ]);
+
+            event(new \Anwar\GunmaAgent\Events\SessionLinked(
+                sessionId: $session->id,
+                customerName: $name,
+                customerEmail: $email,
+            ));
+        }
+
+        return response()->json([
+            'linked_sessions' => count($sessions),
+            'customer_id'       => $request->customer_id,
+            'customer_name'     => $name,
+        ]);
+    }

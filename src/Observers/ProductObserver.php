@@ -12,15 +12,17 @@ class ProductObserver
     public function saved($product): void
     {
         try {
+            $stock = $product->latestStock;
             $this->qdrantService->upsertProduct([
                 'id'          => $product->id,
                 'name'        => $product->title,
                 'description' => $product->description ?? $product->short_description,
-                'price'       => (float) $product->price,
+                'price'       => (float) ($stock?->online_price ?? 0),
                 'status'      => $product->status,
                 'is_online'   => (bool) $product->is_online_available,
                 'slug'        => $product->slug,
                 'image_url'   => $product->images->first()?->image_path ?? null,
+                'stock'       => (int) ($stock?->available_quantity ?? 0),
             ]);
         } catch (\Exception $e) {
             Log::warning("[ProductObserver] Failed to sync to Qdrant", ['id' => $product->id, 'error' => $e->getMessage()]);

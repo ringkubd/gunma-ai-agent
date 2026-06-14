@@ -110,8 +110,8 @@ class QdrantService
                     'title'    => $p->title,
                     'slug'     => $p->slug,
                     'price'    => (float) ($p->latestStock?->online_price ?? 0),
-                    'image'    => $p->images->first()?->image,
-                    'stock'    => $p->latestStock?->available_quantity ?? 0,
+                    'image'    => $p->images->first()?->image_path ?? $p->images->first()?->image,
+                    'stock'    => (int) ($p->latestStock?->available_quantity ?? 0),
                     'status'   => $p->status,
                 ],
             ])->toArray();
@@ -183,7 +183,18 @@ class QdrantService
             [
                 'id'      => $this->generateUuid(md5("prod_" . $product['id'])),
                 'vector'  => $vector,
-                'payload' => array_merge($product, ['last_updated' => now()->toIso8601String()]),
+                'payload' => [
+                    'id'           => $product['id'],
+                    'name'         => $product['name'] ?? '',
+                    'description'  => $product['description'] ?? '',
+                    'price'        => (float) ($product['price'] ?? 0),
+                    'status'       => $product['status'] ?? '',
+                    'is_online'    => (bool) ($product['is_online'] ?? false),
+                    'slug'         => $product['slug'] ?? '',
+                    'image_url'    => $product['image_url'] ?? null,
+                    'stock'        => (int) ($product['stock'] ?? 0),
+                    'last_updated' => now()->toIso8601String(),
+                ],
             ]
         ]);
     }
@@ -238,7 +249,7 @@ class QdrantService
     {
         if (empty($points)) return;
 
-        $endpoint = "{$this->qdrantUrl}/collections/{$this->prefixed($collection)}/points";
+        $endpoint = "{$this->qdrantUrl}/collections/{$collection}/points";
 
         $response = Http::timeout(30)
             ->put($endpoint, [
@@ -360,7 +371,7 @@ class QdrantService
     {
         try {
             $response = Http::timeout(15)
-                ->post("{$this->qdrantUrl}/collections/{$this->prefixed($collection)}/points/search", [
+                ->post("{$this->qdrantUrl}/collections/{$collection}/points/search", [
                     'vector'       => $vector,
                     'limit'        => $limit,
                     'with_payload' => true,
@@ -387,7 +398,7 @@ class QdrantService
     {
         try {
             $response = Http::timeout(15)
-                ->post("{$this->qdrantUrl}/collections/{$this->prefixed($collection)}/points/scroll", [
+                ->post("{$this->qdrantUrl}/collections/{$collection}/points/scroll", [
                     'filter'       => $filter,
                     'limit'        => $limit,
                     'with_payload' => true,

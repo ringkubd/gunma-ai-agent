@@ -37,6 +37,7 @@ Route::prefix($prefix)
         Route::post('/sessions/{id}/typing', [ChatController::class, 'typing']);
         Route::get('/sessions/{id}/messages', [ChatController::class, 'getMessages']);
         Route::post('/cart/bulk', [ChatController::class, 'bulkAddToCart']);
+        Route::post('/link-session', [ChatController::class, 'linkSession']);
     });
 
 // Admin Dashboard & Monitoring

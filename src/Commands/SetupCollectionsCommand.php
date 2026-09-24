@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Http;
 
 class SetupCollectionsCommand extends Command
 {
-    protected $signature = 'gunma:setup-qdrant';
+    protected $signature = 'gunma:setup-qdrant {--recreate : Drop and recreate collections (destroys indexed vectors)}';
     protected $description = 'Create required Qdrant collections';
 
     public function handle()
@@ -18,14 +18,21 @@ class SetupCollectionsCommand extends Command
         $prefix = config('gunma-agent.qdrant_collection_prefix', '');
         $collections = config('gunma-agent.qdrant_collections');
 
+        // All collections use the active embedding dimension. Legacy installs
+        // that mixed OpenAI (1536) and Ollama (768) must re-run with the new
+        // uniform dimension after a full reindex.
+        $size = (int) config('gunma-agent.embedding.dims', 768);
+        $force = $this->option('recreate');
+
         foreach ($collections as $key => $name) {
             $prefixedName = $prefix . $name;
-            $this->info("Creating collection: {$prefixedName}...");
-            
-            // Determine vector size
-            // OpenAI (products, cache, history) = 1536
-            // Ollama (recipes, kb, memories) = 768
-            $size = in_array($key, ['products', 'cache', 'history']) ? 1536 : 768;
+
+            if ($force) {
+                $this->warn("Dropping collection: {$prefixedName} ...");
+                Http::delete("{$url}/collections/{$prefixedName}");
+            }
+
+            $this->info("Creating collection: {$prefixedName} ({$size}d)...");
 
             $response = Http::put("{$url}/collections/{$prefixedName}", [
                 'vectors' => [

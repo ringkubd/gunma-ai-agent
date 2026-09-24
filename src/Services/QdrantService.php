@@ -31,7 +31,43 @@ class QdrantService
 
     private function prefixed(string $collection): string
     {
-        return $this->collectionPrefix . $collection;
+        // Idempotent: avoid double-prefixing when callers already pass a
+        // fully-qualified (prefixed) collection name.
+        if ($this->collectionPrefix !== '' && !str_starts_with($collection, $this->collectionPrefix)) {
+            return $this->collectionPrefix . $collection;
+        }
+        return $collection;
+    }
+
+    /**
+     * Public, prefix-aware vector search for external integrations (e.g. Scout).
+     */
+    public function searchCollection(string $collection, array $vector, int $limit = 10): array
+    {
+        return $this->vectorSearch($this->prefixed($collection), $vector, $limit);
+    }
+
+    /**
+     * Public, prefix-aware point upsert for external integrations (e.g. Scout).
+     */
+    public function upsertPoints(string $collection, array $points): void
+    {
+        $this->bulkUpsert($this->prefixed($collection), $points);
+    }
+
+    /**
+     * Public, prefix-aware point delete for external integrations (e.g. Scout).
+     */
+    public function deletePoints(string $collection, array $ids): void
+    {
+        try {
+            Http::timeout(15)->post(
+                "{$this->qdrantUrl}/collections/" . $this->prefixed($collection) . '/points/delete',
+                ['points' => $ids]
+            );
+        } catch (\Exception $e) {
+            Log::warning('[QdrantService] Point delete failed', ['error' => $e->getMessage()]);
+        }
     }
 
     /* ── Product Search (OpenAI embeddings, 1536d) ─────────────── */

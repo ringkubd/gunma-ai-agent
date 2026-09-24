@@ -104,13 +104,21 @@ class ToolExecutor
         if (!$order) return ['error' => 'Order not found.'];
 
         $timeline = [];
-        if (method_exists($order, 'timeline')) {
-            $timeline = $order->timeline()->latest()->get()->map(fn($t) => [
+        if (method_exists($order, 'trackingHistories') && $order->trackingHistories) {
+            $timeline = $order->trackingHistories->map(fn($t) => [
                 'status' => $t->status,
                 'note' => $t->note,
-                'date' => $t->created_at->format('Y-m-d H:i'),
+                'date' => $t->created_at?->format('Y-m-d H:i'),
+            ])->toArray();
+        } elseif ($order->relationLoaded('tracking') && $order->tracking->isNotEmpty()) {
+            $timeline = $order->tracking->map(fn($t) => [
+                'status' => $t->status,
+                'note' => $t->note,
+                'date' => $t->created_at?->format('Y-m-d H:i'),
             ])->toArray();
         }
+
+        $address = $order->address;
 
         return [
             'status' => 'success',
@@ -121,18 +129,21 @@ class ToolExecutor
             'total_amount' => (float) ($order->total_amount ?? 0),
             'due_amount' => (float) ($order->due_amount ?? 0),
             'delivery_date' => $order->delivary_date ? $order->delivary_date->format('Y-m-d') : null,
-            'delivery_address' => $order->address ? [
-                'name' => $order->address->name,
-                'phone' => $order->address->phone,
-                'address' => $order->address->address,
-                'post_code' => $order->address->post_code,
-                'city' => $order->address->city?->name,
-                'state' => $order->address->state?->name,
+            'delivery_address' => $address ? [
+                'name' => $address->shipping_name ?: $address->billing_name,
+                'phone' => $address->shipping_phone ?: $address->billing_phone,
+                'address' => trim(implode(' ', array_filter([
+                    $address->shipping_apartment ?: $address->billing_apartment,
+                    $address->shipping_street ?: $address->billing_street,
+                ]))),
+                'post_code' => $address->shipping_postal_code ?: $address->billing_postal_code,
+                'city' => $address->shipping_city ?: $address->billing_city,
+                'state' => $address->shipping_state ?: $address->billing_state,
             ] : null,
             'items' => $order->orderItems->map(fn($item) => [
-                'name' => $item->product_name,
+                'name' => $item->product_title,
                 'quantity' => $item->quantity,
-                'price' => (float) ($item->price ?? 0),
+                'price' => (float) ($item->unit_price ?? 0),
             ])->toArray(),
             'timeline' => $timeline,
         ];
@@ -153,14 +164,12 @@ class ToolExecutor
         if (!$order) return ['error' => 'Tracking number not found.'];
 
         $trackingHistory = [];
-        if ($order->tracking) {
-            $single = $order->tracking;
-            $trackingHistory[] = [
+        if ($order->tracking && $order->tracking->isNotEmpty()) {
+            $trackingHistory = $order->tracking->map(fn($single) => [
                 'status' => $single->status ?? 'registered',
-                'location' => $single->location ?? null,
-                'note' => $single->remark ?? null,
+                'note' => $single->note ?? null,
                 'date' => $single->created_at?->format('Y-m-d H:i'),
-            ];
+            ])->toArray();
         }
 
         return [
@@ -257,14 +266,21 @@ class ToolExecutor
                 }
                 $existing->update(['quantity' => $newQty]);
             } else {
-                $price = (float) ($product->online_price ?? 0);
-                if (!empty($product->discount)) $price -= (float) $product->discount;
+                $price = (float) ($stock?->online_price ?? 0);
+                $taxPercent = (float) ($product->tax_percent ?? 8);
+                $totalTax = $price * $quantity * ($taxPercent / 100);
 
                 $cartModel::create([
                     'product_id' => $productId,
+                    'product_option_id' => '',
                     'customer_id' => $customer->id,
                     'quantity' => $quantity,
+                    'weight' => (float) ($product->weight ?? 0),
+                    'unit' => $product->unit ?? $stock?->unit,
                     'item_price' => $price,
+                    'tax_percent' => $taxPercent,
+                    'total_tax_amount' => $totalTax,
+                    'total_discount_amount' => 0,
                     'total_amount' => $price * $quantity,
                 ]);
             }
@@ -317,13 +333,20 @@ class ToolExecutor
                             $skipped[] = "{$product->title} already at max stock";
                         }
                     } else {
-                        $price = (float) ($product->online_price ?? 0);
-                        if (!empty($product->discount)) $price -= (float) $product->discount;
+                        $price = (float) ($stock?->online_price ?? 0);
+                        $taxPercent = (float) ($product->tax_percent ?? 8);
+                        $totalTax = $price * ($taxPercent / 100);
                         $cartModel::create([
                             'product_id' => $pid,
+                            'product_option_id' => '',
                             'customer_id' => $customer->id,
                             'quantity' => 1,
+                            'weight' => (float) ($product->weight ?? 0),
+                            'unit' => $product->unit ?? $stock?->unit,
                             'item_price' => $price,
+                            'tax_percent' => $taxPercent,
+                            'total_tax_amount' => $totalTax,
+                            'total_discount_amount' => 0,
                             'total_amount' => $price,
                         ]);
                         $added[] = $product->title;
@@ -720,6 +743,14 @@ class ToolExecutor
         $product = $query->first();
         if (!$product) return ['error' => 'Product not found.'];
 
+        $discount = $product->discount;
+        $discountAmount = 0.0;
+        if ($discount) {
+            $discountAmount = ($discount->type ?? '') === 'percent'
+                ? (float) ($discount->percent ?? 0)
+                : (float) ($discount->amount ?? 0);
+        }
+
         return [
             'status' => 'success',
             'product' => [
@@ -729,12 +760,12 @@ class ToolExecutor
                 'description'  => $product->description,
                 'short_description' => $product->short_description,
                 'price'        => (float) ($product->latestStock?->online_price ?? 0),
-                'discount'     => (float) ($product->discount ?? 0),
+                'discount'     => $discountAmount,
                 'stock'        => (int) ($product->latestStock?->available_quantity ?? 0),
                 'unit'         => $product->latestStock?->unit ?? $product->unit,
-                'images'       => $product->images->pluck('image')->toArray(),
+                'images'       => $product->images->pluck('image_path')->filter()->values()->toArray(),
                 'categories'   => $product->categories->pluck('title')->toArray(),
-                'brand'        => $product->brand,
+                'brand'        => optional($product->brand)->title ?? optional($product->brand)->name,
                 'status'       => $product->status,
                 'is_online'    => (bool) $product->is_online_available,
             ],
@@ -773,15 +804,19 @@ class ToolExecutor
         $limit = min((int) ($args['limit'] ?? 10), 30);
         $sort = $args['sort'] ?? 'latest';
 
-        if ($sort === 'price_asc') $query->orderBy(
-            $productModel::select('online_price')->whereColumn('products.id', 'product_stocks.product_id')->latest('id')->limit(1),
-            'asc'
-        );
-        elseif ($sort === 'price_desc') $query->orderBy(
-            $productModel::select('online_price')->whereColumn('products.id', 'product_stocks.product_id')->latest('id')->limit(1),
-            'desc'
-        );
-        else $query->latest();
+        if ($sort === 'price_asc' || $sort === 'price_desc') {
+            $direction = $sort === 'price_asc' ? 'asc' : 'desc';
+            $query->orderBy(
+                $productModel::select('online_price')
+                    ->from('stocks')
+                    ->whereColumn('stocks.product_id', 'products.id')
+                    ->latest('id')
+                    ->limit(1),
+                $direction
+            );
+        } else {
+            $query->latest();
+        }
 
         $products = $query->limit($limit)->get();
 
@@ -793,7 +828,7 @@ class ToolExecutor
                 'title'  => $p->title,
                 'slug'   => $p->slug,
                 'price'  => (float) ($p->latestStock?->online_price ?? 0),
-                'image'  => $p->images->first()?->image,
+                'image'  => $p->images->first()?->image_path,
                 'stock'  => (int) ($p->latestStock?->available_quantity ?? 0),
             ])->toArray(),
         ];
@@ -906,7 +941,7 @@ class ToolExecutor
         if (class_exists($reviewModel)) {
             $reviewModel::updateOrCreate(
                 ['product_id' => $productId, 'customer_id' => $customer?->id ?? 0],
-                ['rating' => $rating, 'review' => $comment, 'status' => 'pending']
+                ['rating' => $rating, 'comment' => $comment, 'status' => 'pending']
             );
             $reviewSaved = true;
         }

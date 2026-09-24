@@ -8,84 +8,90 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Unified embedding service — Ollama (768d) for recipes/KB, OpenAI (1536d) for products.
+ * Provider-agnostic embedding service.
+ *
+ * All calls go through the OpenAI-compatible /v1/embeddings endpoint, which is
+ * supported by Ollama, OpenAI, DeepSeek, OpenRouter and others. The active
+ * provider/model can be switched at runtime via AgentSettingsService.
+ *
+ * Returned vectors must match the Qdrant collection dimension. Changing the
+ * embedding provider therefore requires recreating collections and reindexing.
  */
 class EmbeddingService
 {
     public function __construct(
-        private readonly string $ollamaUrl,
-        private readonly string $ollamaModel,
-        private readonly string $openaiKey,
-        private readonly string $openaiBaseUrl,
-        private readonly string $openaiEmbedModel,
+        private readonly AgentSettingsService $settings,
     ) {}
 
-    /* ── Ollama (768 dimensions) ───────────────────────────────── */
-
-    public function ollamaEmbed(string $text): array
+    /**
+     * Embed a single text with the active provider.
+     */
+    public function embed(string $text): array
     {
-        $response = Http::timeout(30)
-            ->post("{$this->ollamaUrl}/api/embeddings", [
-                'model'  => $this->ollamaModel,
-                'prompt' => $text,
-            ]);
+        $vectors = $this->embedBulk([$text]);
 
-        if (! $response->ok()) {
-            Log::error('[EmbeddingService] Ollama embed failed', [
-                'status' => $response->status(),
-                'body'   => $response->body(),
-            ]);
-            throw new \RuntimeException('Ollama embedding failed: ' . $response->body());
-        }
-
-        return $response->json('embedding');
-    }
-
-    /* ── OpenAI (1536 dimensions) ──────────────────────────────── */
-
-    public function openaiEmbed(string $text): array
-    {
-        $url = rtrim($this->openaiBaseUrl, '/') . '/embeddings';
-
-        $response = Http::withToken($this->openaiKey)
-            ->timeout(30)
-            ->post($url, [
-                'input' => $text,
-                'model' => $this->openaiEmbedModel,
-            ]);
-
-        if (! $response->ok()) {
-            Log::error('[EmbeddingService] OpenAI embed failed', [
-                'status' => $response->status(),
-                'body'   => $response->body(),
-            ]);
-            throw new \RuntimeException('OpenAI embedding failed: ' . $response->body());
-        }
-
-        return $response->json('data.0.embedding');
+        return $vectors[0] ?? [];
     }
 
     /**
-     * Bulk OpenAI embeddings in a single API call.
+     * Embed multiple texts in a single API call.
+     *
+     * @param  string[]  $texts
+     * @return array<int,array<int,float>>
      */
-    public function openaiEmbedBulk(array $texts): array
+    public function embedBulk(array $texts): array
     {
-        $url = rtrim($this->openaiBaseUrl, '/') . '/embeddings';
-
-        $response = Http::withToken($this->openaiKey)
-            ->timeout(60)
-            ->post($url, [
-                'input' => $texts,
-                'model' => $this->openaiEmbedModel,
-            ]);
-
-        if (! $response->ok()) {
-            throw new \RuntimeException('OpenAI bulk embedding failed: ' . $response->body());
+        if (empty($texts)) {
+            return [];
         }
 
-        return collect($response->json('data'))
+        $baseUrl = rtrim((string) $this->settings->get('embedding_base_url', config('gunma-agent.embedding.base_url')), '/');
+        $apiKey  = (string) $this->settings->get('embedding_api_key', config('gunma-agent.embedding.api_key'));
+        $model   = (string) $this->settings->get('embedding_model', config('gunma-agent.embedding.model'));
+
+        $request = Http::timeout(60)->acceptJson();
+
+        // Local Ollama ignores the key, but sending a dummy is harmless; skip it
+        // entirely when blank to avoid confusing strict gateways.
+        if ($apiKey !== '') {
+            $request = $request->withToken($apiKey);
+        }
+
+        $response = $request->post("{$baseUrl}/embeddings", [
+            'input' => $texts,
+            'model' => $model,
+        ]);
+
+        if (! $response->ok()) {
+            Log::error('[EmbeddingService] Embedding failed', [
+                'provider' => $this->settings->get('embedding_provider'),
+                'model'    => $model,
+                'status'   => $response->status(),
+                'body'     => $response->body(),
+            ]);
+            throw new \RuntimeException('Embedding failed: ' . $response->body());
+        }
+
+        return collect($response->json('data') ?? [])
             ->sortBy('index')
             ->pluck('embedding')
             ->all();
+    }
+
+    /* ── Backwards-compatible aliases ──────────────────────────── */
+
+    public function openaiEmbed(string $text): array
+    {
+        return $this->embed($text);
+    }
+
+    public function ollamaEmbed(string $text): array
+    {
+        return $this->embed($text);
+    }
+
+    public function openaiEmbedBulk(array $texts): array
+    {
+        return $this->embedBulk($texts);
     }
 }

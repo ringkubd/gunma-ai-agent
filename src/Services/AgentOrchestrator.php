@@ -20,19 +20,79 @@ class AgentOrchestrator
         private readonly GreetingInterceptor $greetingInterceptor,
         private readonly QdrantService       $qdrantService,
         private readonly PromptService       $promptService,
-        private readonly string              $openaiKey,
-        private readonly string              $openaiBaseUrl,
-        private readonly string              $openaiModel,
+        private readonly AgentSettingsService $settingsService,
         private readonly string              $websiteUrl,
         private readonly int                 $maxHistory,
-        private readonly string              $ollamaUrl = 'http://localhost:11434',
-        private readonly string              $ollamaChatModel = 'gunma-halal-ai:latest',
     ) {
         $dbPrompt = $this->promptService->getSystemPrompt();
         $styleInstruction = $this->promptService->getStyleInstruction();
         $url = rtrim($this->websiteUrl, '/');
 
         $this->baseSystemPrompt = $dbPrompt . "\n\n---\nSTYLE: {$styleInstruction}\n\nWEBSITE: {$url}";
+    }
+
+    /* ── Active LLM configuration (runtime-switchable) ─────────── */
+
+    private function llm(): array
+    {
+        return [
+            'base_url' => rtrim((string) $this->settingsService->get('llm_base_url', config('gunma-agent.llm.base_url')), '/'),
+            'api_key'  => (string) $this->settingsService->get('llm_api_key', config('gunma-agent.llm.api_key')),
+            'model'    => (string) $this->settingsService->get('llm_model', config('gunma-agent.llm.model')),
+        ];
+    }
+
+    private function fallback(): ?array
+    {
+        if (! $this->settingsService->bool('llm_fallback_enabled', (bool) config('gunma-agent.llm.fallback_enabled', true))) {
+            return null;
+        }
+
+        $baseUrl = (string) $this->settingsService->get('llm_fallback_base_url', config('gunma-agent.llm.fallback_base_url'));
+        $model   = (string) $this->settingsService->get('llm_fallback_model', config('gunma-agent.llm.fallback_model'));
+
+        if ($baseUrl === '' || $model === '') {
+            return null;
+        }
+
+        return [
+            'base_url' => rtrim($baseUrl, '/'),
+            'api_key'  => (string) $this->settingsService->get('llm_fallback_api_key', config('gunma-agent.llm.fallback_api_key')),
+            'model'    => $model,
+        ];
+    }
+
+    /**
+     * POST an OpenAI-compatible chat completion request. Returns null on failure.
+     */
+    private function chatCompletion(array $cfg, array $messages): ?array
+    {
+        $request = Http::timeout(120)->acceptJson();
+        if (($cfg['api_key'] ?? '') !== '') {
+            $request = $request->withToken($cfg['api_key']);
+        }
+
+        try {
+            $response = $request->post($cfg['base_url'] . '/chat/completions', [
+                'model'       => trim($cfg['model']),
+                'messages'    => $messages,
+                'tools'       => ToolExecutor::getToolDefinitions(),
+                'tool_choice' => 'auto',
+            ]);
+        } catch (\Exception $e) {
+            Log::warning('[Agent] LLM request exception', ['error' => $e->getMessage()]);
+            return null;
+        }
+
+        if (! $response->ok()) {
+            Log::warning('[Agent] LLM error response', [
+                'status' => $response->status(),
+                'body'   => mb_substr($response->body(), 0, 500),
+            ]);
+            return null;
+        }
+
+        return $response->json();
     }
 
     /* ── Build context-aware system prompt with user context ───── */
@@ -257,38 +317,34 @@ class AgentOrchestrator
     private function runAgentLoop(ChatSession $session, string $userMessage): string
     {
         $messages = $this->buildContextWindow($session, $userMessage);
-        $url = rtrim($this->openaiBaseUrl, '/') . '/chat/completions';
         $finalContent = '';
         $totalTokens = 0;
         $iterations = 0;
         $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
-        $usedFallback = false;
+        $usedModel = null;
+
+        $primary = $this->llm();
+        $fallback = $this->fallback();
 
         while ($iterations < $maxIterations) {
             $iterations++;
             try {
-                if ($usedFallback) {
-                    $reply = $this->callOllama($messages);
-                    $finalContent = $reply ?? "I'm sorry, I couldn't process that. Would you like to speak with a human agent?";
-                    break;
+                $data = $this->chatCompletion($primary, $messages);
+                $usedModel = $primary['model'];
+
+                // Primary failed → try configured fallback provider.
+                if ($data === null) {
+                    if ($fallback !== null) {
+                        Log::warning('[Agent] Primary LLM failed, trying fallback', ['model' => $fallback['model']]);
+                        $data = $this->chatCompletion($fallback, $messages);
+                        $usedModel = $fallback['model'];
+                    }
+                    if ($data === null) {
+                        $finalContent = "I'm sorry, I couldn't process that. Would you like to speak with a human agent?";
+                        break;
+                    }
                 }
 
-                $response = Http::withToken($this->openaiKey)
-                    ->timeout(60)
-                    ->post($url, [
-                        'model'       => trim($this->openaiModel),
-                        'messages'    => $messages,
-                        'tools'       => ToolExecutor::getToolDefinitions(),
-                        'tool_choice' => 'auto',
-                    ]);
-
-                if (!$response->ok()) {
-                    Log::warning('[Agent] OpenAI error, fallback to Ollama', ['status' => $response->status()]);
-                    $usedFallback = true;
-                    continue;
-                }
-
-                $data = $response->json();
                 $message = $data['choices'][0]['message'] ?? [];
                 $totalTokens += ($data['usage']['total_tokens'] ?? 0);
                 $messages[] = $message;
@@ -296,7 +352,7 @@ class AgentOrchestrator
                 if (!empty($message['tool_calls'])) {
                     foreach ($message['tool_calls'] as $toolCall) {
                         $fnName = $toolCall['function']['name'] ?? '';
-                        $fnArgs = json_decode($toolCall['function']['arguments'] ?? '{}', true);
+                        $fnArgs = json_decode($toolCall['function']['arguments'] ?? '{}', true) ?: [];
                         $result = $this->toolExecutor->execute($fnName, $fnArgs);
 
                         $messages[] = [
@@ -311,14 +367,13 @@ class AgentOrchestrator
                     break;
                 }
             } catch (\Exception $e) {
-                Log::error('[Agent] Loop error, fallback to Ollama', ['error' => $e->getMessage()]);
-                if (!$usedFallback) { $usedFallback = true; continue; }
+                Log::error('[Agent] Loop error', ['error' => $e->getMessage()]);
                 $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
                 break;
             }
         }
 
-        $this->persistMessages($session, $userMessage, $finalContent, $usedFallback ? $this->ollamaChatModel : $this->openaiModel, $totalTokens);
+        $this->persistMessages($session, $userMessage, $finalContent, $usedModel ?? ($primary['model']), $totalTokens);
         $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
         $this->storeConversationSummary($session, $userMessage, $finalContent);
         if ($finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
@@ -333,7 +388,6 @@ class AgentOrchestrator
     private function runAgentLoopStream(ChatSession $session, string $userMessage): \Generator
     {
         $messages = $this->buildContextWindow($session, $userMessage);
-        $url = rtrim($this->openaiBaseUrl, '/') . '/chat/completions';
 
         yield $this->sseEvent('thinking', ['status' => 'Processing your request...']);
 
@@ -341,35 +395,30 @@ class AgentOrchestrator
         $totalTokens = 0;
         $iterations = 0;
         $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
-        $usedFallback = false;
+        $usedModel = null;
+
+        $primary = $this->llm();
+        $fallback = $this->fallback();
 
         while ($iterations < $maxIterations) {
             $iterations++;
             try {
-                if ($usedFallback) {
-                    yield $this->sseEvent('tool_call', ['name' => 'ollama_fallback', 'args' => ['model' => $this->ollamaChatModel]]);
-                    $reply = $this->callOllama($messages);
-                    $finalContent = $reply ?? "I'm sorry, I couldn't process that. Would you like to speak with a human agent?";
-                    yield $this->sseEvent('message', ['content' => $finalContent]);
-                    break;
+                $data = $this->chatCompletion($primary, $messages);
+                $usedModel = $primary['model'];
+
+                if ($data === null) {
+                    if ($fallback !== null) {
+                        yield $this->sseEvent('status', ['message' => 'Primary AI unavailable, switching provider...']);
+                        $data = $this->chatCompletion($fallback, $messages);
+                        $usedModel = $fallback['model'];
+                    }
+                    if ($data === null) {
+                        $finalContent = "I'm sorry, I couldn't process that. Would you like to speak with a human agent?";
+                        yield $this->sseEvent('message', ['content' => $finalContent]);
+                        break;
+                    }
                 }
 
-                $response = Http::withToken($this->openaiKey)
-                    ->timeout(60)
-                    ->post($url, [
-                        'model'       => trim($this->openaiModel),
-                        'messages'    => $messages,
-                        'tools'       => ToolExecutor::getToolDefinitions(),
-                        'tool_choice' => 'auto',
-                    ]);
-
-                if (!$response->ok()) {
-                    yield $this->sseEvent('status', ['message' => 'OpenAI unavailable, switching to local AI...']);
-                    $usedFallback = true;
-                    continue;
-                }
-
-                $data = $response->json();
                 $message = $data['choices'][0]['message'] ?? [];
                 $totalTokens += ($data['usage']['total_tokens'] ?? 0);
                 $messages[] = $message;
@@ -377,7 +426,7 @@ class AgentOrchestrator
                 if (!empty($message['tool_calls'])) {
                     foreach ($message['tool_calls'] as $toolCall) {
                         $fnName = $toolCall['function']['name'] ?? '';
-                        $fnArgs = json_decode($toolCall['function']['arguments'] ?? '{}', true);
+                        $fnArgs = json_decode($toolCall['function']['arguments'] ?? '{}', true) ?: [];
 
                         yield $this->sseEvent('tool_call', ['name' => $fnName, 'args' => $fnArgs]);
                         event(new \Anwar\GunmaAgent\Events\ToolExecuting($session->id, "Executing tool: {$fnName}"));
@@ -399,11 +448,6 @@ class AgentOrchestrator
                 }
             } catch (\Exception $e) {
                 Log::error('[Agent] Stream loop error', ['error' => $e->getMessage()]);
-                if (!$usedFallback) {
-                    yield $this->sseEvent('status', ['message' => 'OpenAI error, switching to local AI...']);
-                    $usedFallback = true;
-                    continue;
-                }
                 $finalContent = "I'm sorry, I encountered an error. How else can I help you?";
                 yield $this->sseEvent('message', ['content' => $finalContent]);
                 break;
@@ -414,7 +458,7 @@ class AgentOrchestrator
             $finalContent = 'I apologize, but I wasn\'t able to generate a proper response. Could you rephrase your question or would you like me to connect you with a human agent?';
         }
 
-        $savedMessage = $this->persistMessages($session, $userMessage, $finalContent, $usedFallback ? $this->ollamaChatModel : $this->openaiModel, $totalTokens);
+        $savedMessage = $this->persistMessages($session, $userMessage, $finalContent, $usedModel ?? $primary['model'], $totalTokens);
         yield $this->sseEvent('message', ['id' => $savedMessage->id, 'content' => $finalContent]);
 
         $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
@@ -424,47 +468,6 @@ class AgentOrchestrator
         }
 
         yield $this->sseEvent('done', ['tokens' => $totalTokens]);
-    }
-
-    /* ── Ollama Fallback ───────────────────────────────────────── */
-
-    private function callOllama(array $messages): ?string
-    {
-        try {
-            $url = rtrim($this->ollamaUrl, '/') . '/api/chat';
-            $ollamaMessages = [];
-            foreach ($messages as $msg) {
-                $role = $msg['role'] ?? '';
-                if (in_array($role, ['system', 'user', 'assistant'])) {
-                    $ollamaMessages[] = ['role' => $role, 'content' => $msg['content'] ?? ''];
-                }
-            }
-
-            $response = Http::timeout(120)->post($url, [
-                'model' => $this->ollamaChatModel,
-                'messages' => $ollamaMessages,
-                'stream' => false,
-                'options' => ['temperature' => 0.7, 'num_predict' => 1024],
-            ]);
-
-            if (!$response->ok()) {
-                Log::error('[Agent] Ollama fallback error', ['status' => $response->status()]);
-                return null;
-            }
-
-            $data = $response->json();
-            $message = $data['message'] ?? [];
-            $content = $message['content'] ?? '';
-
-            if (empty($content) && !empty($message['thinking'])) {
-                $content = $message['thinking'];
-            }
-
-            return $content ?: null;
-        } catch (\Exception $e) {
-            Log::error('[Agent] Ollama fallback exception', ['error' => $e->getMessage()]);
-            return null;
-        }
     }
 
     /* ── Inject similar past conversations as context ─────────── */
@@ -537,7 +540,17 @@ class AgentOrchestrator
             $messages = array_merge($messages, $history);
         }
 
-        $messages[] = ['role' => 'user', 'content' => $userMessage];
+        // The current user message is already persisted (and therefore present in
+        // history). Only append it again if it is not already the last history turn,
+        // to avoid sending the same user text twice to the model.
+        $last = end($history);
+        $alreadyLast = is_array($last)
+            && ($last['role'] ?? null) === 'user'
+            && ($last['content'] ?? null) === $userMessage;
+
+        if (!$alreadyLast) {
+            $messages[] = ['role' => 'user', 'content' => $userMessage];
+        }
 
         return $messages;
     }

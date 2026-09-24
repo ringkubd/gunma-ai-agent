@@ -11,7 +11,9 @@ return new class extends Migration
         Schema::create('chat_sessions', function (Blueprint $table) {
             $table->uuid('id')->primary();
             $table->string('visitor_id', 64)->index();
+            $table->unsignedBigInteger('customer_id')->nullable()->index();
             $table->string('customer_name', 255)->nullable();
+            $table->string('customer_email', 255)->nullable();
             $table->enum('channel', ['web', 'admin', 'whatsapp'])->default('web');
             $table->enum('status', ['active', 'ended', 'archived'])->default('active');
             $table->json('metadata')->nullable();

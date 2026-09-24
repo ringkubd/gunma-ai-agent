@@ -55,7 +55,7 @@ class QdrantEngine extends Engine
             ];
         }
 
-        $this->qdrant->bulkUpsert($collection, $points);
+        $this->qdrant->upsertPoints($collection, $points);
     }
 
     /**
@@ -72,11 +72,7 @@ class QdrantEngine extends Engine
             return $this->formatUuid(md5((string) $model->getScoutKey()));
         })->all();
 
-        // Qdrant delete points
-        \Illuminate\Support\Facades\Http::post(
-            config('gunma-agent.qdrant_url') . "/collections/{$collection}/points/delete",
-            ['points' => $ids]
-        );
+        $this->qdrant->deletePoints($collection, $ids);
     }
 
     /**
@@ -92,7 +88,7 @@ class QdrantEngine extends Engine
 
         $limit = $builder->limit ?? 10;
 
-        return $this->qdrant->vectorSearch($collection, $vector, $limit);
+        return $this->qdrant->searchCollection($collection, $vector, $limit);
     }
 
     /**

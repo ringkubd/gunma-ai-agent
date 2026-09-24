@@ -6,6 +6,7 @@ namespace Anwar\GunmaAgent;
 
 use Illuminate\Support\ServiceProvider;
 use Anwar\GunmaAgent\Services\AgentOrchestrator;
+use Anwar\GunmaAgent\Services\AgentSettingsService;
 use Anwar\GunmaAgent\Services\CustomerInsightService;
 use Anwar\GunmaAgent\Services\EmbeddingService;
 use Anwar\GunmaAgent\Services\ProactiveTriggerService;
@@ -21,13 +22,11 @@ class GunmaAgentServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__ . '/../config/gunma-agent.php', 'gunma-agent');
 
         // Singleton registrations
+        $this->app->singleton(AgentSettingsService::class);
+
         $this->app->singleton(EmbeddingService::class, function ($app) {
             return new EmbeddingService(
-                ollamaUrl:        config('gunma-agent.ollama_url'),
-                ollamaModel:      config('gunma-agent.ollama_embed_model'),
-                openaiKey:        config('gunma-agent.openai_api_key'),
-                openaiBaseUrl:    config('gunma-agent.openai_base_url'),
-                openaiEmbedModel: config('gunma-agent.openai_embed_model'),
+                settings: $app->make(AgentSettingsService::class),
             );
         });
 
@@ -56,13 +55,9 @@ class GunmaAgentServiceProvider extends ServiceProvider
                 greetingInterceptor: $app->make(GreetingInterceptor::class),
                 qdrantService:       $app->make(QdrantService::class),
                 promptService:       $app->make(PromptService::class),
-                openaiKey:           config('gunma-agent.openai_api_key'),
-                openaiBaseUrl:       config('gunma-agent.openai_base_url'),
-                openaiModel:         config('gunma-agent.openai_model'),
+                settingsService:     $app->make(AgentSettingsService::class),
                 websiteUrl:          config('gunma-agent.website_url'),
                 maxHistory:          config('gunma-agent.max_history'),
-                ollamaUrl:           config('gunma-agent.ollama_url'),
-                ollamaChatModel:     config('gunma-agent.ollama_chat_model'),
             );
         });
 
@@ -142,16 +137,37 @@ class GunmaAgentServiceProvider extends ServiceProvider
 
         $chatPrefix    = config('gunma-agent.broadcast_chat_prefix',   'gunma-chat');
         $adminChannel  = config('gunma-agent.broadcast_admin_channel', 'gunma-admin.chats');
+        $adminGuards   = config('gunma-agent.admin_guards', ['web', 'sanctum']);
 
-        // Per-session channel (used by gunma-chat-widget)
+        // Per-session channel (used by gunma-chat-widget).
+        // Guests may subscribe to their own session channel; authenticated
+        // customers may subscribe only to sessions they own.
         \Illuminate\Support\Facades\Broadcast::channel("{$chatPrefix}.{sessionId}", function ($user, $sessionId) {
-            return true; // Public or custom auth logic here
+            $session = \Anwar\GunmaAgent\Models\ChatSession::find($sessionId);
+            if (! $session) {
+                return false;
+            }
+            // No authenticated user (guest channel) — allow, the session id
+            // itself is the shared secret handed to that visitor only.
+            if (! $user) {
+                return true;
+            }
+            return (int) ($session->customer_id ?? 0) === (int) $user->id;
         });
 
-        // Admin monitoring channel (used by gunma-agent-dashboard)
-        \Illuminate\Support\Facades\Broadcast::channel($adminChannel, function ($user) {
-            // Ideally check if user is admin: return $user->is_admin;
-            return true;
+        // Admin monitoring channel (used by gunma-agent-dashboard).
+        // Requires the subscriber to authenticate against an admin guard.
+        \Illuminate\Support\Facades\Broadcast::channel($adminChannel, function ($user) use ($adminGuards) {
+            foreach ($adminGuards as $guard) {
+                try {
+                    if (auth()->guard($guard)->check()) {
+                        return true;
+                    }
+                } catch (\Exception) {
+                    // Guard not present in host app — ignore.
+                }
+            }
+            return false;
         });
     }
 }

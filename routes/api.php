@@ -36,6 +36,7 @@ Route::prefix($prefix)
         Route::post('/sessions/{id}/messages/sync', [ChatController::class, 'sendMessageSync']);
         Route::post('/sessions/{id}/typing', [ChatController::class, 'typing']);
         Route::get('/sessions/{id}/messages', [ChatController::class, 'getMessages']);
+        Route::put('/sessions/{id}/profile', [ChatController::class, 'updateGuestProfile']);
         Route::post('/cart/bulk', [ChatController::class, 'bulkAddToCart']);
     });
 
@@ -52,6 +53,7 @@ Route::prefix($adminPrefix)
         Route::post('/sessions/{id}/toggle-ai', [ChatController::class, 'toggleAi']);
         Route::post('/sessions/{id}/messages', [ChatController::class, 'sendManualMessage']);
         Route::post('/sessions/{id}/typing', [ChatController::class, 'typing']);
+        Route::post('/sessions/{id}/feedback', [ChatController::class, 'feedback']);
         Route::post('/link-session', [ChatController::class, 'linkSession']);
 
         // Support Tickets
@@ -70,6 +72,17 @@ Route::prefix(config('gunma-agent.admin_route_prefix', 'api/admin/chat'))
         Route::post('/link-session', [\Anwar\GunmaAgent\Http\Controllers\ChatController::class, 'linkSession']);
     });
 
-// Email Webhook (Incoming Support Emails)
+// Agent Provider / Model Settings (Admin) — runtime LLM switch
+Route::prefix(config('gunma-agent.admin_route_prefix', 'api/admin/chat'))
+    ->middleware(config('gunma-agent.admin_middleware', ['web']))
+    ->group(function () {
+        Route::get('/settings/llm', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'show']);
+        Route::put('/settings/llm', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'update']);
+        Route::get('/models', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'models']);
+        Route::post('/settings/test', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'test']);
+        Route::post('/reindex', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'reindex']);
+    });
+
+// Email Webhook (Incoming Support Emails) — secret-verified + throttled
 Route::prefix($prefix)->post('webhook/email', [\Anwar\GunmaAgent\Http\Controllers\EmailWebhookController::class, 'handle'])
-    ->middleware(\Illuminate\Http\Middleware\HandleCors::class);
+    ->middleware(['throttle:60,1', \Illuminate\Http\Middleware\HandleCors::class]);

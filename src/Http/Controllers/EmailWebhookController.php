@@ -21,6 +21,16 @@ class EmailWebhookController extends Controller
      */
     public function handle(Request $request): \Illuminate\Http\JsonResponse
     {
+        // Verify shared secret when configured (constant-time compare).
+        $secret = (string) config('gunma-agent.email_webhook_secret');
+        if ($secret !== '') {
+            $provided = (string) $request->header('X-Webhook-Secret', '');
+            if (! hash_equals($secret, $provided)) {
+                Log::warning('[EmailSupport] Rejected webhook: invalid secret');
+                return response()->json(['status' => 'error', 'message' => 'Unauthorized'], 401);
+            }
+        }
+
         // Extract data from Python bridge or other providers
         $rawSender = $request->input('sender'); // e.g., "John Doe <customer@example.com>"
         $subject   = $request->input('subject');

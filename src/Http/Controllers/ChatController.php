@@ -81,13 +81,52 @@ class ChatController extends Controller
         ], 201);
     }
 
+    /* ── Private: ownership guard ──────────────────────────────── */
+
+    /**
+     * Ensure the caller owns this chat session. Authenticated customers are
+     * matched by customer_id; guests must present the same visitor_id the
+     * session was created with (X-Visitor-Id header or visitor_id input).
+     */
+    private function assertSessionOwnership(Request $request, ChatSession $session): void
+    {
+        if (! config('gunma-agent.enforce_session_ownership', true)) {
+            return;
+        }
+
+        // Admin / staff requests (web/sanctum guards) bypass ownership.
+        foreach (config('gunma-agent.admin_guards', ['web', 'sanctum']) as $guard) {
+            try {
+                if (auth()->guard($guard)->check()) {
+                    return;
+                }
+            } catch (\Exception) {
+                // Guard not present in host app — ignore.
+            }
+        }
+
+        $customerId = auth()->id();
+        if ($customerId && (int) $session->customer_id === (int) $customerId) {
+            return;
+        }
+
+        $visitorId = (string) ($request->header('X-Visitor-Id') ?? $request->input('visitor_id', ''));
+        if ($visitorId !== '' && hash_equals((string) $session->visitor_id, $visitorId)) {
+            return;
+        }
+
+        abort(403, 'You are not allowed to access this chat session.');
+    }
+
     /* ── GET /chat/sessions/{id} — Get session with messages ───── */
 
-    public function showSession(string $id): JsonResponse
+    public function showSession(Request $request, string $id): JsonResponse
     {
         $session = ChatSession::with(['messages' => function ($query) {
             $query->whereIn('role', ['user', 'assistant'])->orderBy('created_at');
         }])->findOrFail($id);
+
+        $this->assertSessionOwnership($request, $session);
 
         return response()->json([
             'session' => $session,
@@ -99,6 +138,7 @@ class ChatController extends Controller
     public function sendMessage(Request $request, string $id): StreamedResponse
     {
         $session = ChatSession::findOrFail($id);
+        $this->assertSessionOwnership($request, $session);
 
         if (! $session->isActive()) {
             return new StreamedResponse(function () {
@@ -147,6 +187,7 @@ class ChatController extends Controller
     public function sendMessageSync(Request $request, string $id): JsonResponse
     {
         $session = ChatSession::findOrFail($id);
+        $this->assertSessionOwnership($request, $session);
 
         if (! $session->isActive()) {
             return response()->json(['error' => 'Session has ended.'], 422);
@@ -168,6 +209,7 @@ class ChatController extends Controller
     public function getMessages(Request $request, string $id): JsonResponse
     {
         $session = ChatSession::findOrFail($id);
+        $this->assertSessionOwnership($request, $session);
         $limit   = min((int) ($request->query('limit', 50)), 100);
 
         $messages = ChatMessage::where('session_id', $session->id)
@@ -190,9 +232,10 @@ class ChatController extends Controller
 
     /* ── POST /chat/sessions/{id}/end — End a session ──────────── */
 
-    public function endSession(string $id): JsonResponse
+    public function endSession(Request $request, string $id): JsonResponse
     {
         $session = ChatSession::findOrFail($id);
+        $this->assertSessionOwnership($request, $session);
         $session->end();
 
         return response()->json([
@@ -226,12 +269,24 @@ class ChatController extends Controller
 
     private function sseHeaders(): array
     {
+        $origin = request()->headers->get('Origin');
+        $allowed = config('gunma-agent.cors_origins', ['*']);
+
+        // Echo only allowed origins; never a blanket wildcard when credentials
+        // or an explicit allow-list is configured.
+        if (in_array('*', $allowed, true)) {
+            $acao = $origin ?: '*';
+        } else {
+            $acao = ($origin && in_array($origin, $allowed, true)) ? $origin : ($allowed[0] ?? '');
+        }
+
         return [
             'Content-Type'                => 'text/event-stream',
             'Cache-Control'               => 'no-cache',
             'Connection'                  => 'keep-alive',
             'X-Accel-Buffering'           => 'no',
-            'Access-Control-Allow-Origin' => '*',
+            'Access-Control-Allow-Origin' => $acao,
+            'Vary'                        => 'Origin',
         ];
     }
 
@@ -498,10 +553,28 @@ class ChatController extends Controller
             'customer_id' => 'required|integer',
         ]);
 
+        // Only allow binding the currently-authenticated customer, unless the
+        // caller is an authenticated admin/staff user.
+        $isStaff = false;
+        foreach (config('gunma-agent.admin_guards', ['web', 'sanctum']) as $guard) {
+            try {
+                if (auth()->guard($guard)->check()) { $isStaff = true; break; }
+            } catch (\Exception) { /* guard absent */ }
+        }
+
+        $authCustomerId = auth()->id();
+        if (! $isStaff && (int) $authCustomerId !== (int) $request->customer_id) {
+            abort(403, 'You can only link sessions to your own account.');
+        }
+
         $customer = null;
         $model = config('gunma-agent.models.customer');
         if ($model && class_exists($model)) {
             $customer = $model::find($request->customer_id);
+        }
+
+        if (! $customer) {
+            return response()->json(['error' => 'Customer not found.'], 404);
         }
 
         $name  = $customer->name ?? $customer->first_name ?? null;
@@ -531,3 +604,66 @@ class ChatController extends Controller
             'customer_name'     => $name,
         ]);
     }
+
+    /**
+     * Submit customer feedback for a chat session.
+     * POST /api/admin/chat/sessions/{session}/feedback
+     */
+    public function feedback(Request $request, string $sessionId): JsonResponse
+    {
+        $validated = $request->validate([
+            'rating'  => 'required|integer|min:1|max:5',
+            'comment' => 'nullable|string|max:1000',
+        ]);
+
+        $session = ChatSession::find($sessionId);
+        if (! $session) {
+            return response()->json(['error' => 'Chat session not found.'], 404);
+        }
+
+        DB::table('chat_feedback')->updateOrInsert(
+            ['session_id' => $sessionId],
+            [
+                'rating'     => $validated['rating'],
+                'comment'    => $validated['comment'] ?? null,
+                'updated_at' => now(),
+                'created_at' => now(),
+            ]
+        );
+
+        return response()->json([
+            'session_id' => $sessionId,
+            'rating'     => $validated['rating'],
+        ]);
+    }
+
+    /**
+     * Set the display name/email for a guest chat session (pre-chat form).
+     * PUT /api/chat/sessions/{session}/profile
+     */
+    public function updateGuestProfile(Request $request, string $sessionId): JsonResponse
+    {
+        $validated = $request->validate([
+            'name'  => 'required|string|max:255',
+            'email' => 'required|email|max:255',
+        ]);
+
+        $session = ChatSession::find($sessionId);
+        if (! $session) {
+            return response()->json(['error' => 'Chat session not found.'], 404);
+        }
+
+        $this->assertSessionOwnership($request, $session);
+
+        $session->update([
+            'customer_name'  => $validated['name'],
+            'customer_email' => $validated['email'],
+        ]);
+
+        return response()->json([
+            'session_id'     => $sessionId,
+            'customer_name'  => $validated['name'],
+            'customer_email' => $validated['email'],
+        ]);
+    }
+}

@@ -22,6 +22,45 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | LLM Provider (runtime-switchable)
+    |--------------------------------------------------------------------------
+    | Any OpenAI-compatible /v1 endpoint works here: Ollama, OpenAI, DeepSeek,
+    | OpenRouter, Groq, Gemini (compatibility). Values can be overridden at
+    | runtime from the admin dashboard via the agent_settings table.
+    |
+    | Default is the low-cost Ollama Cloud DeepSeek model with an OpenAI-style
+    | fallback. llm.api_key is optional for local Ollama.
+    */
+    'llm' => [
+        'provider'         => env('GUNMA_LLM_PROVIDER', 'ollama'),
+        'base_url'         => env('GUNMA_LLM_BASE_URL', 'http://127.0.0.1:11434/v1'),
+        'api_key'          => env('GUNMA_LLM_API_KEY', 'ollama'),
+        'model'            => env('GUNMA_LLM_MODEL', 'deepseek-v4.1-flash:cloud'),
+
+        'fallback_enabled' => env('GUNMA_LLM_FALLBACK_ENABLED', true),
+        'fallback_base_url' => env('GUNMA_LLM_FALLBACK_BASE_URL', env('GUNMA_OPENAI_BASE_URL', 'https://api.openai.com/v1')),
+        'fallback_api_key'  => env('GUNMA_LLM_FALLBACK_API_KEY', env('GUNMA_OPENAI_API_KEY')),
+        'fallback_model'    => env('GUNMA_LLM_FALLBACK_MODEL', env('GUNMA_OPENAI_MODEL', 'gpt-4o-mini')),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Embedding Provider (runtime-switchable)
+    |--------------------------------------------------------------------------
+    | Must match the Qdrant collection dimensions. Ollama nomic-embed-text = 768,
+    | OpenAI text-embedding-3-small = 1536. Switching provider requires a full
+    | reindex (collections must be recreated at the new dimension).
+    */
+    'embedding' => [
+        'provider' => env('GUNMA_EMBEDDING_PROVIDER', 'ollama'),
+        'base_url' => env('GUNMA_EMBEDDING_BASE_URL', 'http://127.0.0.1:11434/v1'),
+        'api_key'  => env('GUNMA_EMBEDDING_API_KEY', 'ollama'),
+        'model'    => env('GUNMA_EMBEDDING_MODEL', 'nomic-embed-text'),
+        'dims'     => (int) env('GUNMA_EMBEDDING_DIMS', 768),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Qdrant Vector Database
     |--------------------------------------------------------------------------
     */
@@ -91,6 +130,24 @@ return [
     |--------------------------------------------------------------------------
     */
     'rate_limit'         => (int) env('GUNMA_RATE_LIMIT', 30),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Security
+    |--------------------------------------------------------------------------
+    | admin_guards: guards treated as admin/staff. They bypass per-session
+    |   ownership checks and may link sessions to any customer.
+    | enforce_session_ownership: when true, public session endpoints require
+    |   the caller to own the session (customer_id or matching visitor_id).
+    |   The widget must send the X-Visitor-Id header (added in Phase 3), so this
+    |   defaults to false until the widget is updated; set GUNMA_ENFORCE_SESSION_OWNERSHIP=true
+    |   once the widget and dashboard send X-Visitor-Id.
+    | email_webhook_secret: shared secret for the incoming-email webhook. When
+    |   set, requests must include a matching X-Webhook-Secret header.
+    */
+    'admin_guards'               => explode('|', env('GUNMA_ADMIN_GUARDS', 'web|sanctum')),
+    'enforce_session_ownership'  => env('GUNMA_ENFORCE_SESSION_OWNERSHIP', false),
+    'email_webhook_secret'       => env('GUNMA_EMAIL_WEBHOOK_SECRET'),
 
     /*
     |--------------------------------------------------------------------------

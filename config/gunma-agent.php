@@ -133,6 +133,15 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Queue Embeddings
+    |--------------------------------------------------------------------------
+    | When true, product/order observers dispatch embedding work to the queue
+    | instead of doing it synchronously in the request path.
+    */
+    'queue_embeddings'   => env('GUNMA_QUEUE_EMBEDDINGS', true),
+
+    /*
+    |--------------------------------------------------------------------------
     | Security
     |--------------------------------------------------------------------------
     | admin_guards: guards treated as admin/staff. They bypass per-session
@@ -212,6 +221,7 @@ return [
         'stock'      => env('GUNMA_MODEL_STOCK', \App\Models\Stock::class),
         'post_code'  => env('GUNMA_MODEL_POST_CODE', \App\Models\PostCode::class),
         'review'     => env('GUNMA_MODEL_REVIEW', \App\Models\Review::class),
+        'coupon'     => env('GUNMA_MODEL_COUPON', \App\Models\Coupon::class),
     ],
 
     /*

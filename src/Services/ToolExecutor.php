@@ -664,14 +664,39 @@ class ToolExecutor
 
     private function getActivePromotions(): array
     {
-        return [
-            'status' => 'success',
-            'promotions' => [
-                ['title' => 'First Order Discount', 'code' => 'WELCOME10', 'description' => '10% off on your first order.'],
-                ['title' => 'Free Shipping', 'code' => 'FREESHIP', 'description' => 'Free shipping on orders over ¥5000.'],
-                ['title' => 'Ramadan Special', 'code' => 'RAMADAN', 'description' => 'Buy 5kg Rice, get 1kg Lentil free!'],
-            ],
-        ];
+        $couponModel = config('gunma-agent.models.coupon', \App\Models\Coupon::class);
+        $promotions = [];
+
+        if (class_exists($couponModel)) {
+            try {
+                $now = now();
+                $promotions = $couponModel::where('status', 'Active')
+                    ->where(function ($q) use ($now) {
+                        $q->whereNull('start_date')->orWhere('start_date', '<=', $now);
+                    })
+                    ->where(function ($q) use ($now) {
+                        $q->whereNull('end_date')->orWhere('end_date', '>=', $now);
+                    })
+                    ->limit(10)
+                    ->get()
+                    ->map(function ($c) {
+                        $desc = [];
+                        if ((float) $c->discount_parcent > 0) $desc[] = ((float) $c->discount_parcent) . '% off';
+                        if ((float) $c->discount_amount > 0) $desc[] = '¥' . number_format((float) $c->discount_amount) . ' off';
+                        if ((float) $c->min_buying_amount > 0) $desc[] = 'min ¥' . number_format((float) $c->min_buying_amount);
+                        return [
+                            'title' => $c->title,
+                            'code' => $c->code,
+                            'description' => implode(', ', $desc) ?: 'Active coupon',
+                        ];
+                    })
+                    ->toArray();
+            } catch (\Exception $e) {
+                Log::warning('[ToolExecutor] Coupon fetch failed', ['error' => $e->getMessage()]);
+            }
+        }
+
+        return ['status' => 'success', 'promotions' => $promotions];
     }
 
     private function handOffToHuman(array $args): array
@@ -890,29 +915,47 @@ class ToolExecutor
 
         if (!$code) return ['error' => 'Please provide a coupon code.'];
 
-        // In production this would query a coupons/promotions table
-        $coupons = [
-            'WELCOME10' => ['type' => 'percent', 'value' => 10, 'min' => 0, 'desc' => '10% off first order'],
-            'FREESHIP'  => ['type' => 'free_shipping', 'value' => 0, 'min' => 5000, 'desc' => 'Free shipping over ¥5000'],
-            'RAMADAN'   => ['type' => 'percent', 'value' => 15, 'min' => 3000, 'desc' => '15% off orders over ¥3000'],
-            'FLAT200'   => ['type' => 'flat', 'value' => 200, 'min' => 2000, 'desc' => '¥200 off orders over ¥2000'],
-        ];
-
-        $coupon = $coupons[$code] ?? null;
-        if (!$coupon) return ['error' => 'Invalid coupon code.'];
-
-        if ($cartTotal > 0 && $cartTotal < $coupon['min']) {
-            return ['error' => "Minimum order of ¥{$coupon['min']} required for this coupon."];
+        $couponModel = config('gunma-agent.models.coupon', \App\Models\Coupon::class);
+        if (!class_exists($couponModel)) {
+            return ['error' => 'Coupons are not available right now.'];
         }
 
-        $discount = 0;
-        if ($coupon['type'] === 'percent') $discount = $cartTotal * ($coupon['value'] / 100);
-        elseif ($coupon['type'] === 'flat') $discount = $coupon['value'];
+        // Query the host coupons table (active + within validity window).
+        $now = now();
+        $coupon = $couponModel::whereRaw('UPPER(code) = ?', [$code])
+            ->where('status', 'Active')
+            ->where(function ($q) use ($now) {
+                $q->whereNull('start_date')->orWhere('start_date', '<=', $now);
+            })
+            ->where(function ($q) use ($now) {
+                $q->whereNull('end_date')->orWhere('end_date', '>=', $now);
+            })
+            ->first();
+
+        if (!$coupon) return ['error' => 'Invalid or expired coupon code.'];
+
+        $min = (float) ($coupon->min_buying_amount ?? 0);
+        if ($cartTotal > 0 && $cartTotal < $min) {
+            return ['error' => 'Minimum order of ¥' . number_format($min) . ' required for this coupon.'];
+        }
+
+        $percent = (float) ($coupon->discount_parcent ?? 0);
+        $flat = (float) ($coupon->discount_amount ?? 0);
+
+        $discount = 0.0;
+        $description = $coupon->title ?: $code;
+        if ($percent > 0) {
+            $discount = $cartTotal * ($percent / 100);
+            $description .= " ({$percent}% off)";
+        } elseif ($flat > 0) {
+            $discount = $flat;
+            $description .= ' (¥' . number_format($flat) . ' off)';
+        }
 
         return [
             'status' => 'success',
-            'code' => $code,
-            'description' => $coupon['desc'],
+            'code' => $coupon->code,
+            'description' => $description,
             'discount_amount' => round($discount, 2),
             'new_total' => $cartTotal > 0 ? round(max(0, $cartTotal - $discount), 2) : null,
         ];

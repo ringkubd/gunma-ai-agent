@@ -142,6 +142,9 @@ class GunmaAgentServiceProvider extends ServiceProvider
         if (class_exists($orderModel)) {
             $orderModel::observe(\Anwar\GunmaAgent\Observers\OrderObserver::class);
         }
+
+        // Broadcast SessionEnded whenever a chat session's status becomes "ended".
+        \Anwar\GunmaAgent\Models\ChatSession::observe(\Anwar\GunmaAgent\Observers\ChatSessionObserver::class);
     }
 
     private function registerBroadcastingChannels(): void

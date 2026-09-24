@@ -122,12 +122,23 @@ class ToolExecutor
 
         $address = $order->address;
 
+        // Payment semantics: Cash-on-Delivery orders are legitimately "Unpaid"
+        // with an outstanding due_amount until the driver collects payment.
+        // The agent must NOT tell the customer their COD order has a problem.
+        $isCash = in_array($order->payment_method, ['Cash', 'COD'], true);
+        $paymentNote = $isCash
+            ? 'Cash on Delivery: payment is collected when the order is delivered. An "Unpaid" status or a due amount is normal and NOT a problem.'
+            : 'Card/online payment.';
+
         return [
             'status' => 'success',
             'order_id' => $order->id,
             'tracking_no' => $order->tracking_no,
             'order_status' => $order->status,
+            'payment_method' => $order->payment_method,
             'payment_status' => $order->payment_status,
+            'is_cash_on_delivery' => $isCash,
+            'payment_note' => $paymentNote,
             'total_amount' => (float) ($order->total_amount ?? 0),
             'due_amount' => (float) ($order->due_amount ?? 0),
             'delivery_date' => $order->delivary_date ? $order->delivary_date->format('Y-m-d') : null,
@@ -653,15 +664,39 @@ class ToolExecutor
 
         $items = $cartModel::where('customer_id', $customer->id)
             ->with('product')
-            ->get()
-            ->map(fn($item) => [
+            ->get();
+
+        $subtotal = 0.0;
+        $tax = 0.0;
+        $mapped = $items->map(function ($item) use (&$subtotal, &$tax) {
+            $lineNet = (float) $item->total_amount;
+            $lineTax = (float) ($item->total_tax_amount ?? 0);
+            $subtotal += $lineNet;
+            $tax += $lineTax;
+            return [
                 'product_id' => $item->product_id,
                 'name'       => $item->product->title ?? 'Unknown',
                 'quantity'   => $item->quantity,
                 'price'      => (float) $item->item_price,
-            ])->toArray();
+                'line_total' => round($lineNet, 2),
+                'line_tax'   => round($lineTax, 2),
+            ];
+        })->toArray();
 
-        return ['status' => 'success', 'items' => $items, 'total_items' => count($items)];
+        // Cart figures EXCLUDE shipping. The checkout adds 8% tax (already in
+        // total_tax_amount) and a shipping charge, so quote the customer the
+        // full amount when relevant.
+        $totalWithTax = round($subtotal + $tax, 2);
+
+        return [
+            'status'      => 'success',
+            'items'       => $mapped,
+            'total_items' => count($mapped),
+            'subtotal'    => round($subtotal, 2),
+            'tax'         => round($tax, 2),
+            'total_with_tax' => $totalWithTax,
+            'note'        => 'Prices exclude shipping. Checkout adds shipping (¥0 for orders ¥10,000+ outside Okinawa, otherwise ¥1,200). Quote total_with_tax (plus shipping) as the payable amount.',
+        ];
     }
 
     private function getActivePromotions(): array

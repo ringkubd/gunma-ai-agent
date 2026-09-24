@@ -86,3 +86,7 @@ Route::prefix(config('gunma-agent.admin_route_prefix', 'api/admin/chat'))
 // Email Webhook (Incoming Support Emails) — secret-verified + throttled
 Route::prefix($prefix)->post('webhook/email', [\Anwar\GunmaAgent\Http\Controllers\EmailWebhookController::class, 'handle'])
     ->middleware(['throttle:60,1', \Illuminate\Http\Middleware\HandleCors::class]);
+
+// Chatwoot Webhook (WhatsApp/Facebook/Instagram/Email/Website) — secret/HMAC verified + throttled
+Route::prefix($prefix)->post('webhook/chatwoot', [\Anwar\GunmaAgent\Http\Controllers\ChatwootWebhookController::class, 'handle'])
+    ->middleware(['throttle:120,1', \Illuminate\Http\Middleware\HandleCors::class]);

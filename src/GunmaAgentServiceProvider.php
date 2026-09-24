@@ -24,6 +24,8 @@ class GunmaAgentServiceProvider extends ServiceProvider
         // Singleton registrations
         $this->app->singleton(AgentSettingsService::class);
 
+        $this->app->singleton(\Anwar\GunmaAgent\Services\ChatwootService::class);
+
         $this->app->singleton(EmbeddingService::class, function ($app) {
             return new EmbeddingService(
                 settings: $app->make(AgentSettingsService::class),

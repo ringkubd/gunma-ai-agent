@@ -227,6 +227,27 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Chatwoot Integration
+    |--------------------------------------------------------------------------
+    | Unify WhatsApp / Facebook / Instagram / Email / Website chat under one
+    | Chatwoot inbox. Inbound messages are auto-answered by Piku.
+    |
+    | base_url       : e.g. https://support.gunmahalalfood.com
+    | api_key        : Chatwoot API access token (Settings → API)
+    | account_id     : Chatwoot account id (usually 1)
+    | shared_secret  : simple shared secret expected in X-Webhook-Secret
+    | webhook_secret : HMAC secret used to verify X-Chatwoot-Signature
+    */
+    'chatwoot' => [
+        'base_url'       => env('CHATWOOT_BASE_URL'),
+        'api_key'        => env('CHATWOOT_API_KEY'),
+        'account_id'     => (int) env('CHATWOOT_ACCOUNT_ID', 1),
+        'shared_secret'  => env('CHATWOOT_WEBHOOK_SECRET'),
+        'webhook_secret' => env('CHATWOOT_HMAC_SECRET'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | CORS
     |--------------------------------------------------------------------------
     */

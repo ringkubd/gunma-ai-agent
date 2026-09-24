@@ -157,15 +157,16 @@ class AgentSettingsController extends Controller
 
     /**
      * Trigger a full reindex (products + purchase history) into Qdrant.
+     * Dispatched to the queue so large catalogs do not block the request.
      */
-    public function reindex(): JsonResponse
+    public function reindex(Request $request): JsonResponse
     {
-        // Sync, but bounded — large catalogs should be queued.
-        \Illuminate\Support\Facades\Artisan::call('gunma:sync-qdrant', ['--type' => 'all']);
+        $type = $request->input('type', 'all');
+
+        \Anwar\GunmaAgent\Jobs\ReindexQdrant::dispatch($type);
 
         return response()->json([
-            'message' => 'Reindex started/completed.',
-            'output'  => trim(\Illuminate\Support\Facades\Artisan::output()),
+            'message' => "Reindex ({$type}) queued. Embeddings will be regenerated in the background.",
         ]);
     }
 

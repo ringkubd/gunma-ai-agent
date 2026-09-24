@@ -63,7 +63,138 @@ class AgentOrchestrator
     }
 
     /**
+     * Vision (multimodal) model config. Used when a message contains an image.
+     * Defaults to the main LLM (DeepSeek v4.1 flash supports vision + tools).
+     */
+    private function vision(): ?array
+    {
+        if (! config('gunma-agent.vision.enabled', true)) {
+            return null;
+        }
+
+        $baseUrl = (string) config('gunma-agent.vision.base_url', config('gunma-agent.llm.base_url'));
+        $model   = (string) config('gunma-agent.vision.model', '');
+        $apiKey  = (string) config('gunma-agent.vision.api_key', config('gunma-agent.llm.api_key'));
+
+        // If no dedicated vision model is set, fall back to the main LLM.
+        if ($model === '') {
+            return $this->llm();
+        }
+
+        if ($baseUrl === '') {
+            return null;
+        }
+
+        return [
+            'base_url' => rtrim($baseUrl, '/'),
+            'api_key'  => $apiKey,
+            'model'    => $model,
+        ];
+    }
+
+    /**
+     * Extract image URLs from a message (supports markdown ![](url) and the
+     * widget's [IMAGE: url] marker).
+     *
+     * @return string[]
+     */
+    private function extractImageUrls(string $message): array
+    {
+        $urls = [];
+        if (preg_match_all('/\[IMAGE:\s*(https?:\/\/[^\]]+)\]/i', $message, $m)) {
+            $urls = array_merge($urls, $m[1]);
+        }
+        if (preg_match_all('/!\[[^\]]*\]\((https?:\/\/[^)]+)\)/i', $message, $m)) {
+            $urls = array_merge($urls, $m[1]);
+        }
+        if (preg_match_all('/https?:\/\/[^\s"\']+\.(?:jpg|jpeg|png|gif|webp)/i', $message, $m)) {
+            $urls = array_merge($urls, $m[0]);
+        }
+        return array_values(array_unique($urls));
+    }
+
+    /**
+     * Build multimodal content parts from text + image URLs (OpenAI format).
+     * Ollama Cloud does not accept image URLs, so images are inlined as base64
+     * data URIs (read from local storage or fetched over HTTP).
+     */
+    private function withImages(string $text, array $imageUrls): array
+    {
+        $parts = [['type' => 'text', 'text' => $text]];
+        foreach ($imageUrls as $url) {
+            $dataUri = $this->toDataUri($url);
+            if ($dataUri) {
+                $parts[] = ['type' => 'image_url', 'image_url' => ['url' => $dataUri]];
+            }
+        }
+        return $parts;
+    }
+
+    /**
+     * Convert an image URL/path to a base64 data URI, or null on failure.
+     */
+    private function toDataUri(string $url): ?string
+    {
+        // Already a data URI.
+        if (str_starts_with($url, 'data:')) {
+            return $url;
+        }
+
+        try {
+            $binary = null;
+            $mime = 'image/jpeg';
+
+            // 1) Local file for our own uploads (/storage/... or /chat_uploads/...).
+            $path = parse_url($url, PHP_URL_PATH) ?? '';
+            $localCandidates = [];
+            if (str_contains($path, '/storage/')) {
+                $rel = explode('/storage/', $path, 2)[1];
+                $localCandidates[] = storage_path('app/public/' . $rel);
+                $localCandidates[] = public_path('storage/' . $rel);
+            }
+            if (str_contains($path, '/chat_uploads/')) {
+                $rel = explode('/chat_uploads/', $path, 2)[1];
+                $localCandidates[] = public_path('chat_uploads/' . $rel);
+            }
+            foreach ($localCandidates as $c) {
+                if (is_file($c)) {
+                    $binary = @file_get_contents($c);
+                    $mime = @mime_content_type($c) ?: $mime;
+                    break;
+                }
+            }
+
+            // 2) Fallback: fetch over HTTP (only for public URLs).
+            if ($binary === null && preg_match('#^https?://#i', $url)) {
+                $resp = Http::timeout(15)->get($url);
+                if ($resp->ok()) {
+                    $binary = $resp->body();
+                    $mime = $resp->header('Content-Type') ?: $mime;
+                }
+            }
+
+            if ($binary === null || $binary === '') {
+                Log::warning('[Agent] Could not inline image for vision', ['url' => $url]);
+                return null;
+            }
+
+            // Cap ~8MB to stay within provider limits.
+            if (strlen($binary) > 8 * 1024 * 1024) {
+                Log::warning('[Agent] Image too large for vision', ['url' => $url, 'bytes' => strlen($binary)]);
+                return null;
+            }
+
+            return 'data:' . $mime . ';base64,' . base64_encode($binary);
+        } catch (\Exception $e) {
+            Log::warning('[Agent] Image inline failed', ['url' => $url, 'error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
      * POST an OpenAI-compatible chat completion request. Returns null on failure.
+     * When the response is a thinking model (content empty but reasoning present),
+     * the reasoning text is promoted to content so callers always have text.
      */
     private function chatCompletion(array $cfg, array $messages): ?array
     {
@@ -92,7 +223,21 @@ class AgentOrchestrator
             return null;
         }
 
-        return $response->json();
+        $data = $response->json();
+
+        // Thinking models (e.g. DeepSeek) may leave content empty on truncation
+        // and put the answer in `reasoning`. Promote it so the turn isn't blank.
+        $choice = $data['choices'][0] ?? null;
+        if (is_array($choice)) {
+            $msg = $choice['message'] ?? [];
+            $hasToolCalls = !empty($msg['tool_calls']);
+            $content = trim((string) ($msg['content'] ?? ''));
+            if (! $hasToolCalls && $content === '' && !empty($msg['reasoning'])) {
+                $data['choices'][0]['message']['content'] = trim((string) $msg['reasoning']);
+            }
+        }
+
+        return $data;
     }
 
     /* ── Build context-aware system prompt with user context ───── */
@@ -150,7 +295,63 @@ class AgentOrchestrator
 
         $parts[] = "## PRODUCT FORMAT\nWhen listing products, use numbered list with clickable product name links:\n1. [Product Name]({$this->websiteUrl}/slug) - ¥Price\n2. [Product Name]({$this->websiteUrl}/slug) - ¥Price\n\nAfter every product list, ALWAYS add:\nJust reply with the number to add to cart, say **add all** for everything, or I can add items for you!\n\nFor recipe ideas, end with:\n**[🛒 Add ALL Ingredients to Cart]({$this->websiteUrl}/cart/add_bulk?ids=[id1,id2...])**\n\nIMPORTANT: Never show stock quantity unless the user specifically asks.";
 
+        $parts[] = $this->conversationGuidance($ctx);
+
         return implode("\n\n", $parts);
+    }
+
+    /**
+     * Built-in conversational guidance: shopkeeper-narrative style, step-by-step
+     * ordering, image handling, and automatic tool use. Applied on top of the
+     * editable DB prompt so these behaviours always hold.
+     */
+    private function conversationGuidance(array $ctx): string
+    {
+        $loggedIn = ($ctx['is_guest'] ?? true) === false ? 'yes' : 'no';
+        $checkoutUrl = rtrim($this->websiteUrl, '/') . '/checkout';
+
+        return <<<TXT
+## HOW TO TALK (VERY IMPORTANT)
+Talk like a friendly shopkeeper at the next door dokan — warm, natural, casual.
+- Do NOT sound like a form or a robot. Use everyday words, short friendly sentences.
+- Speak in the customer's own language (Bangla, Japanese, English, etc.).
+- Tell a small "golpo kotha" (friendly chit-chat) while you work: e.g. "Aaj brishti, garam garam khichuri bhalo lage — chal ar dal ache, lagbe?"
+- Ask ONE natural follow-up question at a time instead of dumping everything.
+
+## AUTOMATIC TOOL USE (do it yourself, don't ask permission)
+When the customer speaks naturally, YOU decide and call the right tools automatically:
+- "amar X lagbe / X dao / X lagbe bhai" → search_products_bulk (or filter_products) → present the match → add_item_to_cart when they confirm.
+- "cart e add koro / add this" → add_item_to_cart / bulk_add_to_cart.
+- "order korte chai / I want to order" → get_cart_contents first, confirm delivery address/date naturally, then guide to checkout.
+- "order kothay / amar order" → get_order_status (use order id/tracking, or the logged-in customer's latest).
+- "delivery kobe / koto din" → check_delivery_time / check_stock_availability with post code.
+- "kichu jante chai / info" → search_support_kb, then answer conversationally.
+- "problem / complaint / payment issue" → create_support_ticket; missing/damaged → create_order_claim.
+- "recipe / ranna" → search_recipes then search_products_bulk for the ingredients ({{BULK_BUTTON}} list).
+Never ask "should I use a tool?" — just use it and reply naturally with the result.
+
+## STEP-BY-STEP ORDERING (story/narrative flow)
+Help the customer order through friendly conversation, step by step:
+1. Understand what they want; suggest products (use cart contents to avoid duplicates).
+2. Confirm the items in a natural sentence ("Tahole 2kg chal ar 1L tel nicchi — thik ache?").
+3. Add to cart with the cart tools.
+4. For checkout, hand off to the in-chat checkout panel: the add-to-cart tools already
+   return action "open_checkout" which opens checkout inside the chat. If they are not
+   logged in, gently ask them to log in from the chat checkout panel.
+5. Confirm delivery details conversationally (address, date/time) — the checkout panel
+   handles the actual address, delivery slot, coins, and payment (Cash or card via Stripe).
+6. After they finish, wish them well and ask if anything else is needed.
+Checkout URL (fallback): {$checkoutUrl}
+Customer logged in: {$loggedIn}
+
+## IMAGES (multimodal)
+If the customer sends a photo (product, recipe, receipt, damaged item, screenshot):
+- Look at it and respond helpfully. Identify the product/issue from the image.
+- Product photo → search for a matching product and offer to add it.
+- Recipe photo → read it and offer the ingredients as a shopping list.
+- Damaged/wrong item or receipt → create_order_claim / create_support_ticket and reassure them.
+- Never say you cannot see images.
+TXT;
     }
 
     private function getUserContext(ChatSession $session): array
@@ -316,14 +517,16 @@ class AgentOrchestrator
 
     private function runAgentLoop(ChatSession $session, string $userMessage): string
     {
-        $messages = $this->buildContextWindow($session, $userMessage);
+        $imageUrls = $this->extractImageUrls($userMessage);
+        $messages = $this->buildContextWindow($session, $userMessage, $imageUrls);
         $finalContent = '';
         $totalTokens = 0;
         $iterations = 0;
         $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
         $usedModel = null;
 
-        $primary = $this->llm();
+        // Use the vision model when the message carries an image.
+        $primary = !empty($imageUrls) ? ($this->vision() ?? $this->llm()) : $this->llm();
         $fallback = $this->fallback();
 
         while ($iterations < $maxIterations) {
@@ -364,6 +567,9 @@ class AgentOrchestrator
                     }
                 } else {
                     $finalContent = $message['content'] ?? '';
+                    if (trim((string) $finalContent) === '' && !empty($message['reasoning'])) {
+                        $finalContent = $message['reasoning'];
+                    }
                     break;
                 }
             } catch (\Exception $e) {
@@ -387,7 +593,8 @@ class AgentOrchestrator
 
     private function runAgentLoopStream(ChatSession $session, string $userMessage): \Generator
     {
-        $messages = $this->buildContextWindow($session, $userMessage);
+        $imageUrls = $this->extractImageUrls($userMessage);
+        $messages = $this->buildContextWindow($session, $userMessage, $imageUrls);
 
         yield $this->sseEvent('thinking', ['status' => 'Processing your request...']);
 
@@ -397,7 +604,7 @@ class AgentOrchestrator
         $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
         $usedModel = null;
 
-        $primary = $this->llm();
+        $primary = !empty($imageUrls) ? ($this->vision() ?? $this->llm()) : $this->llm();
         $fallback = $this->fallback();
 
         while ($iterations < $maxIterations) {
@@ -444,6 +651,9 @@ class AgentOrchestrator
                     }
                 } else {
                     $finalContent = $message['content'] ?? '';
+                    if (trim((string) $finalContent) === '' && !empty($message['reasoning'])) {
+                        $finalContent = $message['reasoning'];
+                    }
                     break;
                 }
             } catch (\Exception $e) {
@@ -512,9 +722,19 @@ class AgentOrchestrator
 
     /* ── Build Context Window ──────────────────────────────────── */
 
-    private function buildContextWindow(ChatSession $session, string $userMessage): array
+    private function buildContextWindow(ChatSession $session, string $userMessage, array $imageUrls = []): array
     {
         $systemPrompt = $this->buildSystemPrompt($session);
+
+        // If the message carries images, send the model a clean text (without the
+        // [IMAGE: url] markers) plus the image parts.
+        $textForModel = $userMessage;
+        if (!empty($imageUrls)) {
+            $textForModel = trim(preg_replace('/\[IMAGE:\s*https?:\/\/[^\]]+\]/i', '', $userMessage));
+            if ($textForModel === '') {
+                $textForModel = 'Please look at this image and help me.';
+            }
+        }
 
         $messages = [
             ['role' => 'system', 'content' => $systemPrompt],
@@ -549,7 +769,23 @@ class AgentOrchestrator
             && ($last['content'] ?? null) === $userMessage;
 
         if (!$alreadyLast) {
-            $messages[] = ['role' => 'user', 'content' => $userMessage];
+            $messages[] = ['role' => 'user', 'content' => $textForModel];
+        }
+
+        // Attach images to the last user turn (multimodal), replacing any history
+        // entry that still contains the raw marker.
+        if (!empty($imageUrls)) {
+            $replaced = false;
+            for ($i = count($messages) - 1; $i >= 0; $i--) {
+                if (($messages[$i]['role'] ?? '') === 'user') {
+                    $messages[$i]['content'] = $this->withImages($textForModel, $imageUrls);
+                    $replaced = true;
+                    break;
+                }
+            }
+            if (! $replaced) {
+                $messages[] = ['role' => 'user', 'content' => $this->withImages($textForModel, $imageUrls)];
+            }
         }
 
         return $messages;

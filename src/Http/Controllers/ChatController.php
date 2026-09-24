@@ -245,26 +245,74 @@ class ChatController extends Controller
         ]);
     }
 
-    /* ── POST /chat/upload — Upload a file (images for claims) ──── */
+    /* ── POST /chat/upload — Upload a file (images for claims/vision) ── */
 
     public function upload(Request $request): JsonResponse
     {
         $request->validate([
-            'file' => 'required|image|mimes:jpeg,png,jpg,gif|max:5120', // 5MB limit
+            'file' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:10240', // 10MB
         ]);
 
         if ($request->hasFile('file')) {
             $file = $request->file('file');
-            $path = $file->store('chat_uploads', 'public');
-            $url = asset('storage/' . $path);
+
+            // Prefer the public disk (web-servable); fall back to a chat_uploads
+            // directory under public/ when no storage symlink exists.
+            $disk = config('gunma-agent.upload_disk', 'public');
+            $url = null;
+
+            try {
+                $path = $file->store('chat_uploads', $disk);
+                if ($path) {
+                    $url = $disk === 'public'
+                        ? $this->publicStorageUrl($path)
+                        : \Illuminate\Support\Facades\Storage::disk($disk)->url($path);
+                }
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::warning('[Chat] upload store failed, trying public dir', ['error' => $e->getMessage()]);
+            }
+
+            if (! $url) {
+                // Fallback: write directly under public/chat_uploads (no symlink needed).
+                $name = 'chat_' . uniqid() . '.' . $file->getClientOriginalExtension();
+                $file->move(public_path('chat_uploads'), $name);
+                $url = rtrim(config('app.url'), '/') . '/chat_uploads/' . $name;
+            }
 
             return response()->json([
                 'status' => 'success',
-                'url' => $url,
+                'url'    => $url,
             ]);
         }
 
         return response()->json(['error' => 'No file uploaded.'], 422);
+    }
+
+    /**
+     * Build a public URL for a storage/app/public path, preferring the symlinked
+     * /storage route and falling back to serving via the API host.
+     */
+    private function publicStorageUrl(string $path): string
+    {
+        // If the storage symlink exists, use the canonical asset URL.
+        if (is_link(public_path('storage')) || file_exists(public_path('storage'))) {
+            return asset('storage/' . $path);
+        }
+
+        // No symlink: serve directly from the app root (/chat_uploads handled by
+        // a route fallback) — but for vision we need an absolute URL the model
+        // can fetch. Copy into public/ as a fallback.
+        $src = storage_path('app/public/' . $path);
+        $destName = basename($path);
+        $destDir = public_path('chat_uploads');
+        if (! is_dir($destDir)) {
+            @mkdir($destDir, 0755, true);
+        }
+        if (is_file($src)) {
+            @copy($src, $destDir . '/' . $destName);
+        }
+
+        return rtrim(config('app.url'), '/') . '/chat_uploads/' . $destName;
     }
 
     /* ── Private: SSE Helpers ──────────────────────────────────── */

@@ -22,6 +22,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Vision (Multimodal)
+    |--------------------------------------------------------------------------
+    | Used automatically when a customer sends an image. Defaults to the main
+    | LLM (DeepSeek v4.1 flash supports vision + tools + thinking).
+    */
+    'vision' => [
+        'enabled'  => env('GUNMA_VISION_ENABLED', true),
+        'base_url' => env('GUNMA_VISION_BASE_URL'),
+        'api_key'  => env('GUNMA_VISION_API_KEY'),
+        'model'    => env('GUNMA_VISION_MODEL'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | LLM Provider (runtime-switchable)
     |--------------------------------------------------------------------------
     | Any OpenAI-compatible /v1 endpoint works here: Ollama, OpenAI, DeepSeek,

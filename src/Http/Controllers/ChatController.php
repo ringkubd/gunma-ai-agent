@@ -214,9 +214,11 @@ class ChatController extends Controller
 
         $messages = ChatMessage::where('session_id', $session->id)
             ->whereIn('role', ['user', 'assistant'])
-            ->orderBy('created_at')
+            ->orderByDesc('created_at')
             ->take($limit)
             ->get()
+            ->sortBy('created_at')
+            ->values()
             ->map(fn ($m) => [
                 'id'         => $m->id,
                 'role'       => $m->role,

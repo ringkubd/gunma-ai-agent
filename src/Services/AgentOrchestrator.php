@@ -117,7 +117,7 @@ class AgentOrchestrator
             '/\b(pay|payment|stripe|card\s*payment|pay\s*kor)\b/u',
             '/চেকআউট|অর্ডার\s*(কর|কোর)|পেমেন্ট|টাকা\s*দি/u',
             // Login / register
-            '/\b(log[\s-]?in|sign[\s-]?in|login|register|sign[\s-]?up|account\s*(khol|koro|create))\b/u',
+            '/\b(log[\s-]?in|sign[\s-]?in|login|register|sign[\s-]?up|account\s*(khol|koro|create|bana)\w*)\b/u',
             '/লগইন|সাইন\s*ইন|রেজিস্টার|অ্যাকাউন্ট/u',
             // Add to cart
             '/\b(add\s*(to\s*)?cart|cart\s*e\s*(add|dao)|cart\s*(koro|kor)|add\s*kor)/u',

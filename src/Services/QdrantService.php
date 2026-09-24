@@ -212,11 +212,35 @@ class QdrantService
      */
     public function upsertProduct(array $product): void
     {
-        $text = ($product['name'] ?? '') . ' ' . ($product['description'] ?? '');
-        $vector = $this->embeddingService->openaiEmbed($text);
+        $this->upsertProductsBulk([$product]);
+    }
 
-        $this->bulkUpsert($this->collections['products'], [
-            [
+    /**
+     * Bulk upsert products using a single batched embedding call.
+     * Much faster than per-product embedding for full reindexes.
+     *
+     * @param array<int,array<string,mixed>> $products
+     */
+    public function upsertProductsBulk(array $products): void
+    {
+        if (empty($products)) {
+            return;
+        }
+
+        $texts = array_map(
+            fn ($p) => trim(($p['name'] ?? '') . ' ' . ($p['description'] ?? '')),
+            $products
+        );
+
+        $vectors = $this->embeddingService->openaiEmbedBulk($texts);
+
+        $points = [];
+        foreach ($products as $i => $product) {
+            $vector = $vectors[$i] ?? null;
+            if (empty($vector)) {
+                continue;
+            }
+            $points[] = [
                 'id'      => $this->generateUuid(md5("prod_" . $product['id'])),
                 'vector'  => $vector,
                 'payload' => [
@@ -231,20 +255,33 @@ class QdrantService
                     'stock'        => (int) ($product['stock'] ?? 0),
                     'last_updated' => now()->toIso8601String(),
                 ],
-            ]
-        ]);
+            ];
+        }
+
+        $this->bulkUpsert($this->collections['products'], $points);
     }
 
     /**
-     * Index a purchase event to build a semantic profile for the customer.
+     * Bulk index purchase-history items using a single batched embedding call.
+     *
+     * @param array<int,array<string,mixed>> $items
      */
-    public function indexOrderHistory(int $customerId, array $item): void
+    public function indexOrderHistoryBulk(int $customerId, array $items): void
     {
-        $text = "Customer bought: " . ($item['name'] ?? '');
-        $vector = $this->embeddingService->openaiEmbed($text);
+        if (empty($items)) {
+            return;
+        }
 
-        $this->bulkUpsert($this->collections['history'], [
-            [
+        $texts = array_map(fn ($it) => 'Customer bought: ' . ($it['name'] ?? ''), $items);
+        $vectors = $this->embeddingService->openaiEmbedBulk($texts);
+
+        $points = [];
+        foreach ($items as $i => $item) {
+            $vector = $vectors[$i] ?? null;
+            if (empty($vector)) {
+                continue;
+            }
+            $points[] = [
                 'id'      => $this->generateUuid(md5("order_" . ($item['id'] ?? microtime()))),
                 'vector'  => $vector,
                 'payload' => [
@@ -252,9 +289,19 @@ class QdrantService
                     'product_id'  => $item['product_id'] ?? null,
                     'name'        => $item['name'] ?? '',
                     'timestamp'   => now()->toIso8601String(),
-                ]
-            ]
-        ]);
+                ],
+            ];
+        }
+
+        $this->bulkUpsert($this->collections['history'], $points);
+    }
+
+    /**
+     * Index a purchase event to build a semantic profile for the customer.
+     */
+    public function indexOrderHistory(int $customerId, array $item): void
+    {
+        $this->indexOrderHistoryBulk($customerId, [$item]);
     }
 
     /**

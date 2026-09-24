@@ -46,23 +46,25 @@ class ReindexQdrant implements ShouldQueue
             ->where('is_online_available', 'Yes')
             ->with(['latestStock', 'images'])
             ->chunk(100, function ($products) use ($qdrantService) {
+                $batch = [];
                 foreach ($products as $product) {
-                    try {
-                        $stock = $product->latestStock;
-                        $qdrantService->upsertProduct([
-                            'id'          => $product->id,
-                            'name'        => $product->title,
-                            'description' => $product->description ?? $product->short_description,
-                            'price'       => (float) ($stock?->online_price ?? 0),
-                            'status'      => $product->status,
-                            'is_online'   => (bool) $product->is_online_available,
-                            'slug'        => $product->slug,
-                            'image_url'   => $product->images->first()?->image_path ?? null,
-                            'stock'       => (int) ($stock?->available_quantity ?? 0),
-                        ]);
-                    } catch (\Exception $e) {
-                        Log::warning('[ReindexQdrant] product failed', ['id' => $product->id, 'error' => $e->getMessage()]);
-                    }
+                    $stock = $product->latestStock;
+                    $batch[] = [
+                        'id'          => $product->id,
+                        'name'        => $product->title,
+                        'description' => $product->description ?? $product->short_description,
+                        'price'       => (float) ($stock?->online_price ?? 0),
+                        'status'      => $product->status,
+                        'is_online'   => (bool) $product->is_online_available,
+                        'slug'        => $product->slug,
+                        'image_url'   => $product->images->first()?->image_path ?? null,
+                        'stock'       => (int) ($stock?->available_quantity ?? 0),
+                    ];
+                }
+                try {
+                    $qdrantService->upsertProductsBulk($batch);
+                } catch (\Exception $e) {
+                    Log::warning('[ReindexQdrant] product batch failed', ['error' => $e->getMessage()]);
                 }
             });
     }
@@ -78,17 +80,22 @@ class ReindexQdrant implements ShouldQueue
             ->whereNotNull('customer_id')
             ->with('orderItems')
             ->chunk(100, function ($orders) use ($qdrantService) {
+                // Group items by customer for batched embedding per customer.
+                $byCustomer = [];
                 foreach ($orders as $order) {
                     foreach ($order->orderItems as $item) {
-                        try {
-                            $qdrantService->indexOrderHistory((int) $order->customer_id, [
-                                'id'         => $item->id,
-                                'product_id' => $item->product_id,
-                                'name'       => $item->product_title ?? $item->product?->title,
-                            ]);
-                        } catch (\Exception $e) {
-                            Log::warning('[ReindexQdrant] history failed', ['order' => $order->id, 'error' => $e->getMessage()]);
-                        }
+                        $byCustomer[(int) $order->customer_id][] = [
+                            'id'         => $item->id,
+                            'product_id' => $item->product_id,
+                            'name'       => $item->product_title ?? $item->product?->title,
+                        ];
+                    }
+                }
+                foreach ($byCustomer as $customerId => $items) {
+                    try {
+                        $qdrantService->indexOrderHistoryBulk((int) $customerId, $items);
+                    } catch (\Exception $e) {
+                        Log::warning('[ReindexQdrant] history batch failed', ['customer' => $customerId, 'error' => $e->getMessage()]);
                     }
                 }
             });

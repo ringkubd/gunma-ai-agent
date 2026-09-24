@@ -93,6 +93,47 @@ class AgentOrchestrator
     }
 
     /**
+     * Tools that perform a UI action in the widget (open a panel). Their output
+     * must never be served/stored from the semantic cache, otherwise the action
+     * is skipped on repeat queries.
+     */
+    private const ACTION_TOOLS = ['open_checkout', 'open_login', 'add_item_to_cart', 'bulk_add_to_cart'];
+
+    /**
+     * Does the message look like an action request (checkout/order/pay/login/
+     * add-to-cart)? These must always run the agent loop so the corresponding
+     * tool fires — never a cached text reply.
+     */
+    private function isActionIntent(string $message): bool
+    {
+        $m = mb_strtolower(trim($message));
+        if ($m === '') {
+            return false;
+        }
+
+        $patterns = [
+            // Checkout / order / pay
+            '/\b(checkout|check[\s-]?out|order\s*(koro|korte|korbo|place|now)|place\s*order|kacchi|order\s*kor)\b/u',
+            '/\b(pay|payment|stripe|card\s*payment|pay\s*kor)\b/u',
+            '/চেকআউট|অর্ডার\s*(কর|কোর)|পেমেন্ট|টাকা\s*দি/u',
+            // Login / register
+            '/\b(log[\s-]?in|sign[\s-]?in|login|register|sign[\s-]?up|account\s*(khol|koro|create))\b/u',
+            '/লগইন|সাইন\s*ইন|রেজিস্টার|অ্যাকাউন্ট/u',
+            // Add to cart
+            '/\b(add\s*(to\s*)?cart|cart\s*e\s*(add|dao)|cart\s*(koro|kor)|add\s*kor)/u',
+            '/কার্টে\s*(add|যোগ|দাও)/u',
+        ];
+
+        foreach ($patterns as $p) {
+            if (preg_match($p, $m)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Extract image URLs from a message (supports markdown ![](url) and the
      * widget's [IMAGE: url] marker).
      *
@@ -419,12 +460,16 @@ TXT;
             return $greeting;
         }
 
-        // 2. Semantic cache
-        $cachedResponse = $this->qdrantService->getSemanticCache($userMessage);
-        if ($cachedResponse !== null) {
-            Log::info('[Agent] Semantic cache hit');
-            $this->persistMessages($session, $userMessage, $cachedResponse, 'semantic_cache');
-            return $cachedResponse;
+        // 2. Semantic cache — skipped for action requests (checkout/login/cart)
+        //    so the corresponding tool always fires instead of a cached reply.
+        $isAction = $this->isActionIntent($userMessage);
+        if (! $isAction) {
+            $cachedResponse = $this->qdrantService->getSemanticCache($userMessage);
+            if ($cachedResponse !== null) {
+                Log::info('[Agent] Semantic cache hit');
+                $this->persistMessages($session, $userMessage, $cachedResponse, 'semantic_cache');
+                return $cachedResponse;
+            }
         }
 
         // 3. KB fast check
@@ -485,13 +530,17 @@ TXT;
             return;
         }
 
-        // 2. Semantic cache
-        $cachedResponse = $this->qdrantService->getSemanticCache($userMessage);
-        if ($cachedResponse !== null) {
-            $msg = $this->persistMessages($session, $userMessage, $cachedResponse, 'semantic_cache');
-            yield $this->sseEvent('message', ['id' => $msg->id, 'content' => $cachedResponse]);
-            yield $this->sseEvent('done', []);
-            return;
+        // 2. Semantic cache — skipped for action requests (checkout/login/cart)
+        //    so the corresponding tool always fires instead of a cached reply.
+        $isAction = $this->isActionIntent($userMessage);
+        if (! $isAction) {
+            $cachedResponse = $this->qdrantService->getSemanticCache($userMessage);
+            if ($cachedResponse !== null) {
+                $msg = $this->persistMessages($session, $userMessage, $cachedResponse, 'semantic_cache');
+                yield $this->sseEvent('message', ['id' => $msg->id, 'content' => $cachedResponse]);
+                yield $this->sseEvent('done', []);
+                return;
+            }
         }
 
         // 3. KB fast check
@@ -525,6 +574,8 @@ TXT;
         $iterations = 0;
         $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
         $usedModel = null;
+        $usedActionTool = false;
+        $isAction = $this->isActionIntent($userMessage);
 
         // Use the vision model when the message carries an image.
         $primary = !empty($imageUrls) ? ($this->vision() ?? $this->llm()) : $this->llm();
@@ -557,6 +608,9 @@ TXT;
                     foreach ($message['tool_calls'] as $toolCall) {
                         $fnName = $toolCall['function']['name'] ?? '';
                         $fnArgs = json_decode($toolCall['function']['arguments'] ?? '{}', true) ?: [];
+                        if (in_array($fnName, self::ACTION_TOOLS, true)) {
+                            $usedActionTool = true;
+                        }
                         $result = $this->toolExecutor->execute($fnName, $fnArgs);
 
                         $messages[] = [
@@ -583,7 +637,8 @@ TXT;
         $this->persistMessages($session, $userMessage, $finalContent, $usedModel ?? ($primary['model']), $totalTokens);
         $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
         $this->storeConversationSummary($session, $userMessage, $finalContent);
-        if ($finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
+        // Never cache replies that triggered a UI action tool (they must re-run).
+        if (! $usedActionTool && ! $isAction && $finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
             $this->qdrantService->setSemanticCache($userMessage, $finalContent);
         }
 
@@ -604,6 +659,8 @@ TXT;
         $iterations = 0;
         $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
         $usedModel = null;
+        $usedActionTool = false;
+        $isAction = $this->isActionIntent($userMessage);
 
         $primary = !empty($imageUrls) ? ($this->vision() ?? $this->llm()) : $this->llm();
         $fallback = $this->fallback();
@@ -635,6 +692,9 @@ TXT;
                     foreach ($message['tool_calls'] as $toolCall) {
                         $fnName = $toolCall['function']['name'] ?? '';
                         $fnArgs = json_decode($toolCall['function']['arguments'] ?? '{}', true) ?: [];
+                        if (in_array($fnName, self::ACTION_TOOLS, true)) {
+                            $usedActionTool = true;
+                        }
 
                         yield $this->sseEvent('tool_call', ['name' => $fnName, 'args' => $fnArgs]);
                         event(new \Anwar\GunmaAgent\Events\ToolExecuting($session->id, "Executing tool: {$fnName}"));
@@ -674,7 +734,8 @@ TXT;
 
         $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
         $this->storeConversationSummary($session, $userMessage, $finalContent);
-        if ($finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
+        // Never cache replies that triggered a UI action tool (they must re-run).
+        if (! $usedActionTool && ! $isAction && $finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
             $this->qdrantService->setSemanticCache($userMessage, $finalContent);
         }
 

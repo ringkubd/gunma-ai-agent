@@ -447,82 +447,140 @@ class ChatController extends Controller
     }
 
     /**
-     * Bulk Add to Cart (Proxy to core backend logic or direct DB access)
+     * Bulk Add to Cart — writes to the SAME cart table the storefront reads,
+     * using the same identity rules as App\Http\Controllers\Frontend\CartAPIController:
+     * authenticated customers by customer_id, guests by the encrypted `guest_id`
+     * cookie (or an explicitly supplied `cookie`).
      */
     public function bulkAddToCart(Request $request): JsonResponse
     {
         $productIds = $request->input('product_ids', []);
-        $cookie = $request->input('cookie');
 
         if (empty($productIds)) {
             return response()->json(['error' => 'No products provided.'], 422);
         }
 
-        // Config-based model resolution (no hard-coded class names)
-        $cartModel = config('gunma-agent.models.cart', \App\Models\Cart::class);
+        $cartModel  = config('gunma-agent.models.cart', \App\Models\Cart::class);
         $stockModel = config('gunma-agent.models.stock', \App\Models\Stock::class);
+        $productModel = config('gunma-agent.models.product', \App\Models\Product::class);
 
         if (!class_exists($cartModel) || !class_exists($stockModel)) {
             return response()->json(['error' => 'Cart models not available.'], 500);
         }
 
-        $results = [];
         $customerId = auth('customer')->id();
-        $cookieId = null;
+        [$cookieId, $encryptedCookie, $isNewCookie] = $this->resolveGuestCartIdentity($request, $customerId);
 
-        if (!$customerId && $cookie) {
-            try {
-                $cookieId = \Illuminate\Support\Facades\Crypt::decrypt($cookie);
-            } catch (\Exception $e) {
-                $cookieId = $cookie; // fallback
-            }
-        }
+        $results = [];
 
         foreach ($productIds as $id) {
-            $stock = $stockModel::where('product_id', $id)->latest('id')->first();
-            $price = $stock ? $stock->online_price : 0;
+            $lastStock = $stockModel::where('product_id', $id)->latest('id')->first();
+            $price = (float) ($lastStock->online_price ?? 0);
 
-            $data = [
-                'product_id' => $id,
-                'product_option_id' => "",
-                'quantity' => 1,
-                'item_price' => $price,
-                'discount_amount' => 0,
-                'tax_percent' => 8,
-            ];
-
-            if ($customerId) {
-                $data['customer_id'] = $customerId;
-                $duplicate = $cartModel::where('product_id', $id)->where('customer_id', $customerId)->first();
-            } else {
-                $data['cookie_id'] = $cookieId;
-                $duplicate = $cartModel::where('product_id', $id)->where('cookie_id', $cookieId)->first();
+            // Discount + tax (mirror CartAPIController)
+            $discount = 0.0;
+            $taxPercent = 8.0;
+            $weight = 0.0;
+            $unit = null;
+            if (class_exists($productModel)) {
+                $product = $productModel::with('latestStock')->find($id);
+                if ($product) {
+                    $discount = (float) ($product->discount->amount ?? 0);
+                    $taxPercent = (float) ($product->tax_percent ?? 8);
+                    $weight = (float) ($product->weight ?? 0);
+                    $unit = $product->unit;
+                }
             }
 
+            $identity = $customerId
+                ? ['customer_id' => $customerId]
+                : ['cookie_id' => $cookieId];
+
+            $duplicate = $cartModel::where('product_id', $id)
+                ->where('product_option_id', '')
+                ->where($identity)
+                ->first();
+
             if ($duplicate) {
-                $duplicate->increment('quantity');
-                $results[] = $duplicate;
+                $qty = $duplicate->quantity + 1;
+                $duplicate->update([
+                    'quantity' => $qty,
+                    'total_amount' => $qty * ($price - $discount),
+                    'total_discount_amount' => $qty * $discount,
+                    'total_tax_amount' => ($taxPercent / 100) * ($qty * ($price - $discount)),
+                ]);
+                $results[] = $duplicate->fresh();
             } else {
-                $results[] = $cartModel::create($data);
+                $totalAmount = $price - $discount;
+                $results[] = $cartModel::create(array_merge($identity, [
+                    'product_id' => $id,
+                    'product_option_id' => '',
+                    'quantity' => 1,
+                    'weight' => $weight,
+                    'unit' => $unit,
+                    'item_price' => $price,
+                    'discount_amount' => 0,
+                    'tax_percent' => $taxPercent,
+                    'total_discount_amount' => $discount,
+                    'total_tax_amount' => ($taxPercent / 100) * $totalAmount,
+                    'total_amount' => $totalAmount,
+                ]));
             }
         }
 
-        // Broadcast event if it exists in core
+        // Broadcast cart update so the storefront reacts in real-time.
         try {
             if (class_exists('\App\Events\CartUpdated')) {
-                $eventCookieId = $customerId ? null : $cookieId;
-                event(new \App\Events\CartUpdated($eventCookieId, 'bulk_added', ['count' => count($results)], $customerId));
+                event(new \App\Events\CartUpdated(
+                    $customerId ? null : $encryptedCookie,
+                    'bulk_added',
+                    $results[0] ?? null,
+                    $customerId
+                ));
             }
         } catch (\Exception $e) {
             \Log::error('AI Bulk Add Cart event failed', ['error' => $e->getMessage()]);
         }
 
-        return response()->json([
+        $response = response()->json([
             'success' => true,
             'added_count' => count($results),
-            'message' => 'Products added to cart successfully.'
+            'message' => 'Products added to cart successfully.',
         ]);
+
+        // Persist the guest cookie so the next storefront request sees the cart.
+        if (!$customerId && $isNewCookie) {
+            $response->cookie('guest_id', $encryptedCookie, 60 * 24 * 30);
+        }
+
+        return $response;
     }
+
+    /**
+     * Resolve the guest cart identity, mirroring CartAPIController.
+     *
+     * @return array{0:?string,1:?string,2:bool} [cookieId, encryptedCookie, isNewCookie]
+     */
+    private function resolveGuestCartIdentity(Request $request, $customerId): array
+    {
+        if ($customerId) {
+            return [null, null, false];
+        }
+
+        $cookie = $request->cookie('guest_id') ?? $request->input('cookie');
+
+        if ($cookie) {
+            try {
+                return [\Illuminate\Support\Facades\Crypt::decrypt($cookie), $cookie, false];
+            } catch (\Exception $e) {
+                // Fall through — broken cookie, regenerate.
+            }
+        }
+
+        $cookieId = \Illuminate\Support\Str::random(20);
+        return [$cookieId, \Illuminate\Support\Facades\Crypt::encrypt($cookieId), true];
+    }
+
     /**
      * Broadcast typing status.
      */

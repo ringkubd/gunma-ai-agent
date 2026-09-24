@@ -1,0 +1,170 @@
+[
+  {
+    "title": "Classic Beef Biryani",
+    "cuisine": "Bangladeshi",
+    "category": "Main Course",
+    "ingredients": ["beef", "basmati rice", "onion", "garlic", "ginger", "yogurt", "turmeric", "chili powder", "cumin", "coriander powder", "biryani masala", "ghee", "saffron", "salt"],
+    "instructions": "1. Marinate beef with yogurt, ginger, garlic and spices for 2 hours.\n2. Fry sliced onions in ghee until golden brown.\n3. Cook marinated beef until tender.\n4. Parboil basmati rice with whole spices.\n5. Layer rice over the beef, add saffron milk and fried onions.\n6. Cover and cook on low heat (dum) for 25 minutes.\n7. Rest 5 minutes, then fluff and serve."
+  },
+  {
+    "title": "Mutton Rezala",
+    "cuisine": "Bangladeshi",
+    "category": "Main Course",
+    "ingredients": ["mutton", "yogurt", "onion", "garlic", "ginger", "poppy seed paste", "cashew paste", "ghee", "cardamom", "cinnamon", "green chili", "rose water", "salt"],
+    "instructions": "1. Marinate mutton in yogurt, ginger-garlic paste and salt for 1 hour.\n2. Fry whole spices in ghee, add onion paste and cook until golden.\n3. Add marinated mutton and cook until oil separates.\n4. Add poppy seed and cashew paste with a little water.\n5. Slow-cook covered until the meat is tender.\n6. Finish with green chili and a splash of rose water.\n7. Serve with naan or polao."
+  },
+  {
+    "title": "Shorshe Ilish (Hilsa in Mustard)",
+    "cuisine": "Bangladeshi",
+    "category": "Main Course",
+    "ingredients": ["hilsa fish", "mustard paste", "turmeric", "green chili", "mustard oil", "salt"],
+    "instructions": "1. Marinate hilsa pieces with turmeric and salt.\n2. Mix mustard paste with a little water and green chili.\n3. Heat mustard oil and gently place the fish.\n4. Add mustard paste, cover and steam for 8-10 minutes.\n5. Drizzle raw mustard oil and rest before serving.\n6. Serve with plain rice."
+  },
+  {
+    "title": "Bangladeshi Beef Curry",
+    "cuisine": "Bangladeshi",
+    "category": "Main Course",
+    "ingredients": ["beef", "onion", "garlic", "ginger", "panch phoron", "turmeric", "chili powder", "cumin", "coriander", "potato", "oil", "salt"],
+    "instructions": "1. Heat oil and temper panch phoron.\n2. Add onion paste and cook until golden.\n3. Add beef and ground spices, cook 20 minutes.\n4. Add water and simmer until the meat is half-done.\n5. Add potatoes and cook until tender.\n6. Adjust salt and serve with rice."
+  },
+  {
+    "title": "Chicken Khichuri",
+    "cuisine": "Bangladeshi",
+    "category": "Rice Dishes",
+    "ingredients": ["chicken", "rice", "moong dal", "onion", "garlic", "ginger", "turmeric", "ghee", "cumin", "cinnamon", "cardamom", "potato"],
+    "instructions": "1. Dry-roast moong dal until aromatic.\n2. Fry whole spices and onion in ghee.\n3. Add chicken and ginger-garlic, cook 10 minutes.\n4. Add rice, dal, turmeric and water.\n5. Add potatoes and simmer until soft.\n6. Serve hot — perfect for a rainy day."
+  },
+  {
+    "title": "Beef Bhuna",
+    "cuisine": "Bangladeshi",
+    "category": "Main Course",
+    "ingredients": ["beef", "onion", "garlic", "ginger", "turmeric", "chili powder", "cumin", "coriander", "garam masala", "oil", "salt"],
+    "instructions": "1. Cook beef with onion, ginger-garlic and spices until water dries.\n2. Add oil and fry on medium heat.\n3. Keep stirring until the masala coats the meat (bhuna).\n4. Sprinkle garam masala and cover for 5 minutes.\n5. Serve with paratha or rice."
+  },
+  {
+    "title": "Chicken Roast",
+    "cuisine": "Bangladeshi",
+    "category": "Main Course",
+    "ingredients": ["chicken", "yogurt", "onion", "garlic", "ginger", "chili powder", "turmeric", "cumin", "ghee", "saffron", "fried onion", "salt"],
+    "instructions": "1. Marinate chicken in yogurt, spices and fried onion.\n2. Heat ghee and sear the chicken until browned.\n3. Add the marinade and a little water.\n4. Cover and cook on low heat until tender.\n5. Uncover and reduce the gravy until thick and glossy.\n6. Serve with polao."
+  },
+  {
+    "title": "Mishti Doi",
+    "cuisine": "Bangladeshi",
+    "category": "Desserts",
+    "ingredients": ["milk", "sugar", "yogurt", "cardamom"],
+    "instructions": "1. Boil milk and reduce to about three-quarters.\n2. Caramelize sugar and add to the milk.\n3. Cool to lukewarm, then whisk in yogurt as a starter.\n4. Pour into earthen pots and cover.\n5. Keep in a warm place for 6-8 hours to set.\n6. Chill before serving."
+  },
+  {
+    "title": "Payesh (Rice Kheer)",
+    "cuisine": "Bangladeshi",
+    "category": "Desserts",
+    "ingredients": ["milk", "gobindobhog rice", "sugar", "cardamom", "raisins", "cashew", "ghee"],
+    "instructions": "1. Boil milk and add washed rice.\n2. Simmer, stirring often, until the rice is soft and milk thickens.\n3. Add sugar and cardamom.\n4. Stir in ghee, raisins and cashews.\n5. Cook 5 more minutes and serve warm or chilled."
+  },
+  {
+    "title": "Aloo Gobi",
+    "cuisine": "Bangladeshi",
+    "category": "Vegetarian",
+    "ingredients": ["potato", "cauliflower", "onion", "tomato", "ginger", "garlic", "turmeric", "cumin", "coriander", "chili powder", "oil", "salt"],
+    "instructions": "1. Heat oil and temper cumin.\n2. Add onion, ginger and garlic; fry until soft.\n3. Add tomato and spices.\n4. Add potato and cauliflower, toss to coat.\n5. Cover and cook on low heat until tender.\n6. Garnish with coriander and serve with roti."
+  },
+  {
+    "title": "Daal Tadka",
+    "cuisine": "Bangladeshi",
+    "category": "Vegetarian",
+    "ingredients": ["masoor dal", "onion", "garlic", "tomato", "turmeric", "cumin", "mustard seeds", "dried chili", "ghee", "coriander", "salt"],
+    "instructions": "1. Boil dal with turmeric and salt until soft.\n2. Heat ghee, add cumin, mustard seeds and dried chili.\n3. Add onion, garlic and tomato; fry until soft.\n4. Pour the tadka over the dal.\n5. Simmer 5 minutes and garnish with coriander."
+  },
+  {
+    "title": "Chicken Tikka Masala",
+    "cuisine": "Indian",
+    "category": "Main Course",
+    "ingredients": ["chicken", "yogurt", "ginger", "garlic", "chili powder", "turmeric", "garam masala", "tomato puree", "cream", "onion", "butter", "salt"],
+    "instructions": "1. Marinate chicken in yogurt, ginger-garlic and spices.\n2. Grill or pan-sear the chicken.\n3. Cook onion in butter, add tomato puree and spices.\n4. Add cream and simmer into a smooth sauce.\n5. Add the grilled chicken and simmer 10 minutes.\n6. Serve with rice or naan."
+  },
+  {
+    "title": "Vegetable Fried Rice",
+    "cuisine": "Fusion",
+    "category": "Rice Dishes",
+    "ingredients": ["rice", "carrot", "beans", "capsicum", "spring onion", "garlic", "soy sauce", "egg", "oil", "pepper", "salt"],
+    "instructions": "1. Cook rice and cool completely.\n2. Heat oil and scramble the egg; set aside.\n3. Stir-fry garlic and vegetables on high heat.\n4. Add rice, soy sauce, pepper and salt.\n5. Toss in the egg and spring onion.\n6. Serve hot."
+  },
+  {
+    "title": "Kabuli Pulao",
+    "cuisine": "Afghan",
+    "category": "Rice Dishes",
+    "ingredients": ["basmati rice", "lamb", "carrot", "raisins", "onion", "cumin", "cardamom", "cinnamon", "almonds", "oil", "salt"],
+    "instructions": "1. Brown the lamb with onion and whole spices.\n2. Add water and simmer until tender.\n3. Parboil soaked rice and layer over the lamb.\n4. Steam (dum) until the rice is fluffy.\n5. Saute carrot, raisins and almonds for the topping.\n6. Garnish and serve."
+  },
+  {
+    "title": "Chana Masala",
+    "cuisine": "Indian",
+    "category": "Vegetarian",
+    "ingredients": ["chickpeas", "onion", "tomato", "ginger", "garlic", "turmeric", "cumin", "coriander", "garam masala", "chili powder", "oil", "salt"],
+    "instructions": "1. Heat oil and fry onion until golden.\n2. Add ginger-garlic and tomato; cook until soft.\n3. Add spices and cook until oil separates.\n4. Add boiled chickpeas and a little water.\n5. Simmer 15 minutes and mash a few chickpeas to thicken.\n6. Serve with rice or roti."
+  },
+  {
+    "title": "Beef Tehari",
+    "cuisine": "Bangladeshi",
+    "category": "Rice Dishes",
+    "ingredients": ["beef", "rice", "onion", "ginger", "garlic", "turmeric", "chili powder", "cinnamon", "cardamom", "bay leaf", "ghee", "oil", "salt"],
+    "instructions": "1. Cook beef with onion, ginger-garlic and spices until tender.\n2. Parboil rice with whole spices.\n3. Layer the rice over the beef and its gravy.\n4. Add ghee and cook on dum for 20 minutes.\n5. Fluff gently and serve."
+  },
+  {
+    "title": "Prawn Malai Curry",
+    "cuisine": "Bangladeshi",
+    "category": "Main Course",
+    "ingredients": ["prawns", "coconut milk", "onion", "ginger", "garlic", "turmeric", "chili powder", "cumin", "cinnamon", "cardamom", "sugar", "oil", "salt"],
+    "instructions": "1. Marinate prawns with turmeric and salt.\n2. Fry onion paste with whole spices until golden.\n3. Add the ground spices and cook briefly.\n4. Pour in coconut milk and simmer.\n5. Add the prawns and cook 5-6 minutes.\n6. Finish with a pinch of sugar and serve with rice."
+  },
+  {
+    "title": "Mutton Kacchi Biryani",
+    "cuisine": "Bangladeshi",
+    "category": "Main Course",
+    "ingredients": ["mutton", "basmati rice", "potato", "yogurt", "onion", "ginger", "garlic", "biryani masala", "saffron", "ghee", "green chili", "salt"],
+    "instructions": "1. Marinate mutton with yogurt, ginger-garlic and biryani masala overnight.\n2. Fry onions until golden.\n3. Parboil rice and drain.\n4. Layer marinated mutton, potatoes and rice in a heavy pot.\n5. Add saffron milk, ghee and fried onion; seal the lid.\n6. Cook on dum for 45 minutes.\n7. Rest and serve."
+  },
+  {
+    "title": "Vegetable Khichuri",
+    "cuisine": "Bangladeshi",
+    "category": "Rice Dishes",
+    "ingredients": ["rice", "moong dal", "cauliflower", "peas", "carrot", "potato", "onion", "ginger", "turmeric", "cumin", "ghee", "salt"],
+    "instructions": "1. Dry-roast moong dal.\n2. Temper cumin and fry onion and ginger in ghee.\n3. Add vegetables and turmeric; toss.\n4. Add rice, dal and water.\n5. Simmer until soft and porridge-like.\n6. Serve with a dollop of ghee."
+  },
+  {
+    "title": "Roshogolla",
+    "cuisine": "Bangladeshi",
+    "category": "Desserts",
+    "ingredients": ["milk", "lemon juice", "sugar", "water", "cardamom"],
+    "instructions": "1. Curdle milk with lemon juice and drain to make chena.\n2. Knead the chena until smooth.\n3. Roll into small balls.\n4. Boil sugar, water and cardamom to make syrup.\n5. Drop the balls in and cook 15 minutes.\n6. Let them soak and cool before serving."
+  },
+  {
+    "title": "Beef Nihari",
+    "cuisine": "Indian",
+    "category": "Main Course",
+    "ingredients": ["beef shank", "onion", "ginger", "garlic", "yogurt", "wheat flour", "nihari masala", "ghee", "chili powder", "turmeric", "salt"],
+    "instructions": "1. Brown onion in ghee, add ginger-garlic paste.\n2. Add beef and sear well.\n3. Add yogurt, spices and water; cook slowly for 2-3 hours.\n4. Mix flour with water and stir in to thicken.\n5. Simmer 20 minutes.\n6. Garnish with ginger, chili and coriander."
+  },
+  {
+    "title": "Paneer Butter Masala",
+    "cuisine": "Indian",
+    "category": "Vegetarian",
+    "ingredients": ["paneer", "tomato", "onion", "cashew", "butter", "cream", "ginger", "garlic", "chili powder", "garam masala", "kasuri methi", "salt"],
+    "instructions": "1. Boil tomato, onion and cashew; blend to a smooth puree.\n2. Cook the puree in butter with ginger-garlic and spices.\n3. Add cream and a little water.\n4. Add paneer cubes and simmer 10 minutes.\n5. Crush kasuri methi on top.\n6. Serve with naan."
+  },
+  {
+    "title": "Chicken Curry (Bengali Style)",
+    "cuisine": "Bangladeshi",
+    "category": "Main Course",
+    "ingredients": ["chicken", "onion", "ginger", "garlic", "turmeric", "chili powder", "cumin", "coriander", "tomato", "oil", "salt"],
+    "instructions": "1. Heat oil and fry onion until golden.\n2. Add ginger-garlic paste and spices.\n3. Add chicken and cook until it changes colour.\n4. Add tomato and a little water.\n5. Simmer until the chicken is tender and gravy thickens.\n6. Garnish with coriander and serve with rice."
+  },
+  {
+    "title": "Shakshuka",
+    "cuisine": "Fusion",
+    "category": "Breakfast",
+    "ingredients": ["egg", "tomato", "onion", "capsicum", "garlic", "cumin", "paprika", "chili flakes", "coriander", "olive oil", "salt"],
+    "instructions": "1. Saute onion, capsicum and garlic in oil.\n2. Add cumin, paprika and tomato; cook into a sauce.\n3. Make wells and crack in the eggs.\n4. Cover and cook until the whites set.\n5. Garnish with coriander and chili flakes.\n6. Serve with bread."
+  }
+]

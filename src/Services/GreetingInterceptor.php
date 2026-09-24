@@ -16,12 +16,31 @@ class GreetingInterceptor
         'good evening' => null,
         'asalam o alikum' => null,
         'assalamu alaikum' => null,
+        'assalamualaikum' => null,
         'salam'      => null,
+        'salaam'     => null,
+        'kemon achen' => null,
+        'kemon achen bhai' => null,
+        'kem cho'    => null,
+        'kya haal hai' => null,
+        'kaise ho'   => null,
         'thank you'  => 'thanks',
         'thanks'     => 'thanks',
+        'dhanyabad'  => 'thanks',
+        'dhonnobad'  => 'thanks',
+        'shukriya'   => 'thanks',
         'ty'         => 'thanks',
         'bye'        => 'bye',
         'goodbye'    => 'bye',
+        'biday'      => 'bye',
+        'khuda hafiz' => 'bye',
+    ];
+
+    /** Banglish / Hinglish / Roman-Urdu greetings → style hint for the reply. */
+    private const BANGLISH_GREETINGS = [
+        'assalamu alaikum', 'assalamualaikum', 'asalam o alikum', 'salam', 'salaam',
+        'kemon achen', 'kemon achen bhai', 'ki obostha', 'ki khobor', 'valo achen',
+        'kya haal hai', 'kaise ho', 'kem cho',
     ];
 
     /**
@@ -95,6 +114,26 @@ class GreetingInterceptor
             'guest'     => '{time}！ピクです、Gunma Halal Food カスタマーサポートより。本日はどのようにお手伝いしましょうか？',
             'time'      => ['おはようございます', 'こんにちは', 'こんばんは'],
         ],
+
+        // Romanized (Banglish / Hinglish / Roman Urdu) — mirror the customer's style.
+        'banglish' => [
+            'returning' => '{time}, {name}! Gunma Halal Food e abar swagat. Aaj apnake kivabe help korte pari?',
+            'named'     => '{time}, {name}! Ami Piku, Gunma Halal Food theke. Aaj kivabe help korte pari?',
+            'guest'     => '{time}! Ami Piku, Gunma Halal Food customer support theke. Aaj kivabe help korte pari?',
+            'time'      => ['Shuvo shokal', 'Shuvo bikal', 'Shuvo shondha'],
+        ],
+        'hinglish' => [
+            'returning' => '{time}, {name}! Gunma Halal Food mein dobara swagat. Main aapki kaise madad karoon?',
+            'named'     => '{time}, {name}! Main Piku hoon, Gunma Halal Food se. Aaj kaise madad karoon?',
+            'guest'     => '{time}! Main Piku hoon, Gunma Halal Food customer support se. Kaise madad karoon?',
+            'time'      => ['Good morning', 'Namaste', 'Good evening'],
+        ],
+        'roman_ur' => [
+            'returning' => '{time}, {name}! Gunma Halal Food mein dobara khush aamdeed. Main aapki kaise madad karoon?',
+            'named'     => '{time}, {name}! Main Piku hoon, Gunma Halal Food se. Aaj kaise madad karoon?',
+            'guest'     => '{time}! Main Piku hoon, Gunma Halal Food customer support se. Kaise madad karoon?',
+            'time'      => ['Subah bakhair', 'Assalam-o-Alaikum', 'Shab bakhair'],
+        ],
     ];
 
     public function intercept(string $query, ?array $userContext = null): ?string
@@ -104,28 +143,51 @@ class GreetingInterceptor
 
         // Direct greeting match
         if ($type === null && array_key_exists($clean, self::GREETINGS)) {
-            return $this->buildGreeting($userContext);
+            return $this->buildGreeting($userContext, $clean);
         }
 
         if ($type === 'thanks') {
-            return $this->buildThanks($userContext);
+            return $this->buildThanks($userContext, $clean);
         }
 
         if ($type === 'bye') {
-            return $this->buildBye($userContext);
+            return $this->buildBye($userContext, $clean);
         }
 
         return null;
     }
 
-    private function buildGreeting(?array $ctx): string
+    /**
+     * Detect a romanized style from the greeting text itself.
+     * Returns 'banglish' | 'hinglish' | 'roman_ur' | null.
+     */
+    private function romanStyle(string $clean): ?string
+    {
+        if (! in_array($clean, self::BANGLISH_GREETINGS, true)) {
+            return null;
+        }
+        return match ($clean) {
+            'kya haal hai', 'kaise ho', 'kem cho' => 'hinglish',
+            default => 'banglish',
+        };
+    }
+
+    private function buildGreeting(?array $ctx, string $clean = ''): string
     {
         $hour = (int) date('H');
         $timeIndex = $hour < 12 ? 0 : ($hour < 17 ? 1 : 2);
 
         $code = strtolower((string) ($ctx['language_code'] ?? 'en'));
         $primary = explode('-', $code)[0];
-        $tpl = self::TEMPLATES[$primary] ?? null;
+
+        // If the greeting itself is romanized, mirror that style regardless of profile.
+        $style = $this->romanStyle($clean);
+        if ($style !== null) {
+            $tpl = self::TEMPLATES[$style];
+        } else {
+            // Native script for the preferred language; else English.
+            $tpl = self::TEMPLATES[$primary] ?? null;
+        }
 
         $name = $ctx['name'] ?? null;
         $isReturning = ($ctx['previous_orders'] ?? 0) > 0;
@@ -154,11 +216,20 @@ class GreetingInterceptor
         return str_replace(['{time}', '{name}'], [$time, (string) $name], $sentence);
     }
 
-    private function buildThanks(?array $ctx): string
+    private function buildThanks(?array $ctx, string $clean = ''): string
     {
         $primary = explode('-', strtolower((string) ($ctx['language_code'] ?? 'en')))[0];
         $name = $ctx['name'] ?? null;
         $nameSegment = $name ? " {$name}" : '';
+
+        // Romanized thanks.
+        if (in_array($clean, ['dhanyabad', 'dhonnobad'], true)) {
+            return "Apnake onek dhonnobad{$nameSegment}! Ar kichu lagle bolun.";
+        }
+        if ($clean === 'shukriya') {
+            return "Aapka bohat shukriya{$nameSegment}! Kuch aur chahiye to batayein.";
+        }
+
         return match ($primary) {
             'bn' => "আপনাকে অনেক স্বাগতম{$nameSegment}! আর কিছু লাগলে বলুন।",
             'hi' => "आपका बहुत स्वागत है{$nameSegment}! और कुछ चाहिए तो बताइए।",
@@ -168,11 +239,19 @@ class GreetingInterceptor
         };
     }
 
-    private function buildBye(?array $ctx): string
+    private function buildBye(?array $ctx, string $clean = ''): string
     {
         $primary = explode('-', strtolower((string) ($ctx['language_code'] ?? 'en')))[0];
         $name = $ctx['name'] ?? null;
         $nameSegment = $name ? " {$name}" : '';
+
+        if ($clean === 'biday') {
+            return "Biday{$nameSegment}! Bhalo thakben, abar asben!";
+        }
+        if ($clean === 'khuda hafiz') {
+            return "Khuda Hafiz{$nameSegment}! Ache rahein, dobara aayein!";
+        }
+
         return match ($primary) {
             'bn' => "বিদায়{$nameSegment}! ভালো থাকুন, আবার আসবেন!",
             'hi' => "अलविदा{$nameSegment}! अच्छे रहें, फिर आइएगा!",

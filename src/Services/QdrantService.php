@@ -74,10 +74,13 @@ class QdrantService
 
     public function searchProducts(string $query, int $limit = 5): array
     {
-        $results = $this->doVectorSearch($this->collections['products'], $query, $limit, 'openai');
-        if (!empty($results)) return $results;
+        // Skip vector search (and its embedding timeout) when the provider is down.
+        if (! $this->embeddingService->isCircuitOpen()) {
+            $results = $this->doVectorSearch($this->collections['products'], $query, $limit, 'openai');
+            if (!empty($results)) return $results;
+        }
 
-        // Fallback: DB search when Qdrant is empty (e.g. after prefix change, not re-indexed yet)
+        // Fallback: DB search when Qdrant is empty or embeddings unavailable.
         return $this->fallbackDbSearch($query, $limit);
     }
 
@@ -88,23 +91,25 @@ class QdrantService
     {
         if (empty($queries)) return [];
 
-        // Try Qdrant first
-        try {
-            $vectors = $this->embeddingService->openaiEmbedBulk($queries);
-            $results = [];
-            foreach ($queries as $index => $query) {
-                $hits = $this->vectorSearch($this->collections['products'], $vectors[$index], $limitPerQuery);
-                $results[] = [
-                    'query'   => $query,
-                    'results' => $hits,
-                ];
+        // Try Qdrant first (skip when the embedding circuit is open).
+        if (! $this->embeddingService->isCircuitOpen()) {
+            try {
+                $vectors = $this->embeddingService->openaiEmbedBulk($queries);
+                $results = [];
+                foreach ($queries as $index => $query) {
+                    $hits = $this->vectorSearch($this->collections['products'], $vectors[$index], $limitPerQuery);
+                    $results[] = [
+                        'query'   => $query,
+                        'results' => $hits,
+                    ];
+                }
+                // If any query returned results, return all
+                if (!empty(array_filter($results, fn($r) => !empty($r['results'])))) {
+                    return $results;
+                }
+            } catch (\Exception $e) {
+                Log::warning('[QdrantService] Bulk search failed, falling back to DB', ['error' => $e->getMessage()]);
             }
-            // If any query returned results, return all
-            if (!empty(array_filter($results, fn($r) => !empty($r['results'])))) {
-                return $results;
-            }
-        } catch (\Exception $e) {
-            Log::warning('[QdrantService] Bulk search failed, falling back to DB', ['error' => $e->getMessage()]);
         }
 
         // Fallback: DB search for each query
@@ -363,8 +368,14 @@ class QdrantService
             return null;
         }
 
-        $vector = $this->embeddingService->openaiEmbed($query);
-        $results = $this->vectorSearch($this->collections['cache'], $vector, 1);
+        try {
+            $vector = $this->embeddingService->openaiEmbed($query);
+            $results = $this->vectorSearch($this->collections['cache'], $vector, 1);
+        } catch (\Exception $e) {
+            // Embedding provider slow/unavailable — skip cache, never break chat.
+            Log::warning('[QdrantService] Semantic cache lookup skipped', ['error' => $e->getMessage()]);
+            return null;
+        }
 
         if (empty($results)) {
             return null;

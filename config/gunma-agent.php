@@ -60,6 +60,7 @@ return [
         'batch_size' => (int) env('GUNMA_EMBEDDING_BATCH_SIZE', 32),
         'timeout'    => (int) env('GUNMA_EMBEDDING_TIMEOUT', 15),
         'bulk_timeout' => (int) env('GUNMA_EMBEDDING_BULK_TIMEOUT', 300),
+        'circuit_cooldown' => (int) env('GUNMA_EMBEDDING_CIRCUIT_COOLDOWN', 120),
     ],
 
     /*

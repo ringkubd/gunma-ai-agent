@@ -174,18 +174,26 @@ class QdrantService
 
     public function searchRecipes(string $query, int $limit = 3): array
     {
-        $vector = $this->embeddingService->ollamaEmbed($query);
-
-        return $this->vectorSearch($this->collections['recipes'], $vector, $limit);
+        try {
+            $vector = $this->embeddingService->ollamaEmbed($query);
+            return $this->vectorSearch($this->collections['recipes'], $vector, $limit);
+        } catch (\Exception $e) {
+            Log::warning('[QdrantService] Recipe search failed', ['error' => $e->getMessage()]);
+            return [];
+        }
     }
 
     /* ── Support KB Search (Ollama embeddings, 768d) ───────────── */
 
     public function searchSupportKB(string $query, int $limit = 3): array
     {
-        $vector = $this->embeddingService->ollamaEmbed($query);
-
-        return $this->vectorSearch($this->collections['kb'], $vector, $limit);
+        try {
+            $vector = $this->embeddingService->ollamaEmbed($query);
+            return $this->vectorSearch($this->collections['kb'], $vector, $limit);
+        } catch (\Exception $e) {
+            Log::warning('[QdrantService] KB search failed', ['error' => $e->getMessage()]);
+            return [];
+        }
     }
 
     /* ── Upsert Logic ──────────────────────────────────────────── */

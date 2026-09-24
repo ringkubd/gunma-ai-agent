@@ -25,17 +25,18 @@ class EmbeddingService
 
     /**
      * Embed a single text with the active provider.
+     * Uses the short interactive timeout so chat never hangs.
      */
     public function embed(string $text): array
     {
-        $vectors = $this->embedBulk([$text]);
+        $vectors = $this->embedChunk([$text], $this->interactiveTimeout());
 
         return $vectors[0] ?? [];
     }
 
     /**
      * Embed multiple texts in a single API call, chunked to avoid provider
-     * payload/time limits on large batches.
+     * payload/time limits on large batches. Uses the longer bulk timeout.
      *
      * @param  string[]  $texts
      * @return array<int,array<int,float>>
@@ -47,26 +48,32 @@ class EmbeddingService
         }
 
         $chunkSize = (int) config('gunma-agent.embedding.batch_size', 32);
+        $timeout = (int) config('gunma-agent.embedding.bulk_timeout', 300);
         $out = [];
         foreach (array_chunk($texts, max(1, $chunkSize)) as $chunk) {
-            foreach ($this->embedChunk($chunk) as $vector) {
+            foreach ($this->embedChunk($chunk, $timeout) as $vector) {
                 $out[] = $vector;
             }
         }
         return $out;
     }
 
+    private function interactiveTimeout(): int
+    {
+        return (int) config('gunma-agent.embedding.timeout', 15);
+    }
+
     /**
      * @param  string[]  $texts
      * @return array<int,array<int,float>>
      */
-    private function embedChunk(array $texts): array
+    private function embedChunk(array $texts, int $timeout = 180): array
     {
         $baseUrl = rtrim((string) $this->settings->get('embedding_base_url', config('gunma-agent.embedding.base_url')), '/');
         $apiKey  = (string) $this->settings->get('embedding_api_key', config('gunma-agent.embedding.api_key'));
         $model   = (string) $this->settings->get('embedding_model', config('gunma-agent.embedding.model'));
 
-        $request = Http::timeout(180)->acceptJson();
+        $request = Http::timeout($timeout)->acceptJson();
 
         // Local Ollama ignores the key, but sending a dummy is harmless; skip it
         // entirely when blank to avoid confusing strict gateways.

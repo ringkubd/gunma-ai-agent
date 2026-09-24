@@ -58,6 +58,8 @@ return [
         'model'    => env('GUNMA_EMBEDDING_MODEL', 'nomic-embed-text'),
         'dims'     => (int) env('GUNMA_EMBEDDING_DIMS', 768),
         'batch_size' => (int) env('GUNMA_EMBEDDING_BATCH_SIZE', 32),
+        'timeout'    => (int) env('GUNMA_EMBEDDING_TIMEOUT', 15),
+        'bulk_timeout' => (int) env('GUNMA_EMBEDDING_BULK_TIMEOUT', 300),
     ],
 
     /*

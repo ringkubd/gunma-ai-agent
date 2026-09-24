@@ -746,6 +746,22 @@ class ChatController extends Controller
     }
 
     /**
+     * Complete 360° profile for a session's participant (customer or guest).
+     * GET /api/admin/chat/sessions/{id}/profile
+     */
+    public function sessionProfile(string $sessionId): JsonResponse
+    {
+        $session = ChatSession::find($sessionId);
+        if (! $session) {
+            return response()->json(['error' => 'Chat session not found.'], 404);
+        }
+
+        $profile = app(\Anwar\GunmaAgent\Services\CustomerProfileService::class)->forSession($session);
+
+        return response()->json(['data' => $profile]);
+    }
+
+    /**
      * Set the display name/email for a guest chat session (pre-chat form).
      * PUT /api/chat/sessions/{session}/profile
      */

@@ -50,6 +50,7 @@ Route::prefix($adminPrefix)
         Route::get('/stats', [ChatController::class, 'getStats']);
         Route::get('/sessions', [ChatController::class, 'listSessions']);
         Route::get('/sessions/{id}', [ChatController::class, 'getSession']);
+        Route::get('/sessions/{id}/profile', [ChatController::class, 'sessionProfile']);
         Route::post('/sessions/{id}/toggle-ai', [ChatController::class, 'toggleAi']);
         Route::post('/sessions/{id}/messages', [ChatController::class, 'sendManualMessage']);
         Route::post('/sessions/{id}/typing', [ChatController::class, 'typing']);

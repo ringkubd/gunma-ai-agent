@@ -53,6 +53,8 @@ class ToolExecutor
             'record_conversation_summary'    => $this->recordSummary($args),
             'get_active_promotions'          => $this->getActivePromotions(),
             'hand_off_to_human'              => $this->handOffToHuman($args),
+            'open_checkout'                  => $this->openCheckout($args),
+            'open_login'                     => $this->openLogin($args),
             default                          => ['error' => "Unknown tool: {$functionName}"],
         };
     }
@@ -707,6 +709,34 @@ class ToolExecutor
             if ($session) $session->update(['is_ai_enabled' => false]);
         }
         return ['status' => 'success', 'message' => 'A human agent will take over shortly.'];
+    }
+
+    /**
+     * Open the in-chat checkout panel. The widget listens for the
+     * "open_checkout" action and renders the cart → address → delivery →
+     * payment flow inside the chat (no page navigation).
+     */
+    private function openCheckout(array $args): array
+    {
+        return [
+            'status'  => 'success',
+            'message' => 'Opening checkout inside the chat now.',
+            'action'  => 'open_checkout',
+            'url'     => config('gunma-agent.website_url') . '/checkout',
+        ];
+    }
+
+    /**
+     * Open the in-chat login/registration panel.
+     */
+    private function openLogin(array $args): array
+    {
+        return [
+            'status'  => 'success',
+            'message' => 'Opening the login form inside the chat.',
+            'action'  => 'open_login',
+            'url'     => config('gunma-agent.website_url') . '/login',
+        ];
     }
 
     private function createOrderClaim(array $args): array
@@ -1376,6 +1406,22 @@ class ToolExecutor
                 'function' => [
                     'name' => 'hand_off_to_human',
                     'description' => 'Transfer conversation to a human agent.',
+                    'parameters' => ['type' => 'object', 'properties' => (object)[]],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'open_checkout',
+                    'description' => 'Open the checkout panel INSIDE the chat so the customer can review their cart, choose address, delivery date/time, apply coins, and pay (Cash or card) without leaving the chat. Call this whenever the customer says they want to checkout/order/pay, e.g. "checkout koro", "order korte chai", "pay korte chai". Do NOT give a link — just call this tool.',
+                    'parameters' => ['type' => 'object', 'properties' => (object)[]],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'open_login',
+                    'description' => 'Open the login / registration form INSIDE the chat so the customer can log in or create an account without leaving the chat. Call this when the customer wants to log in, sign in, or register, or when login is required before checkout.',
                     'parameters' => ['type' => 'object', 'properties' => (object)[]],
                 ],
             ],

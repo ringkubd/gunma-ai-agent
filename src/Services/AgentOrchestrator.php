@@ -335,13 +335,14 @@ Help the customer order through friendly conversation, step by step:
 1. Understand what they want; suggest products (use cart contents to avoid duplicates).
 2. Confirm the items in a natural sentence ("Tahole 2kg chal ar 1L tel nicchi — thik ache?").
 3. Add to cart with the cart tools.
-4. For checkout, hand off to the in-chat checkout panel: the add-to-cart tools already
-   return action "open_checkout" which opens checkout inside the chat. If they are not
-   logged in, gently ask them to log in from the chat checkout panel.
-5. Confirm delivery details conversationally (address, date/time) — the checkout panel
-   handles the actual address, delivery slot, coins, and payment (Cash or card via Stripe).
-6. After they finish, wish them well and ask if anything else is needed.
-Checkout URL (fallback): {$checkoutUrl}
+4. When the customer wants to checkout / order / pay ("checkout koro", "order korte chai",
+   "pay korte chai", "confirm koro") you MUST call the `open_checkout` tool. It opens the
+   checkout panel INSIDE the chat (cart → address → delivery date/time → coins → payment).
+   NEVER just paste a link and NEVER say you cannot do it — call the tool.
+5. If the customer is not logged in and they need to log in/register, call the `open_login`
+   tool — it opens the login/registration form INSIDE the chat. Never ask them to go to a website.
+6. The checkout panel handles address, delivery slot, coins, and payment (Cash or card via
+   Stripe) — all inside chat. After they finish, wish them well and ask if anything else is needed.
 Customer logged in: {$loggedIn}
 
 ## IMAGES (multimodal)

@@ -239,18 +239,22 @@ class AgentOrchestrator
      */
     private function chatCompletion(array $cfg, array $messages): ?array
     {
-        $request = Http::timeout(120)->acceptJson();
-        if (($cfg['api_key'] ?? '') !== '') {
-            $request = $request->withToken($cfg['api_key']);
-        }
+        $limiter = app(\Anwar\GunmaAgent\Services\ConcurrencyLimiter::class);
 
         try {
-            $response = $request->post($cfg['base_url'] . '/chat/completions', [
-                'model'       => trim($cfg['model']),
-                'messages'    => $messages,
-                'tools'       => ToolExecutor::getToolDefinitions(),
-                'tool_choice' => 'auto',
-            ]);
+            $response = $limiter->run(function () use ($cfg, $messages) {
+                $request = Http::timeout(120)->acceptJson();
+                if (($cfg['api_key'] ?? '') !== '') {
+                    $request = $request->withToken($cfg['api_key']);
+                }
+
+                return $request->post($cfg['base_url'] . '/chat/completions', [
+                    'model'       => trim($cfg['model']),
+                    'messages'    => $messages,
+                    'tools'       => ToolExecutor::getToolDefinitions(),
+                    'tool_choice' => 'auto',
+                ]);
+            });
         } catch (\Exception $e) {
             Log::warning('[Agent] LLM request exception', ['error' => $e->getMessage()]);
             return null;
@@ -300,12 +304,31 @@ class AgentOrchestrator
         if ($triggers['eid_coming']) $nowLines[] = "- EID COMING: Suggest premium cuts, sweets, cooking essentials.";
         $parts[] = implode("\n", $nowLines);
 
+        // Weather (best-effort, cached) for weather-aware suggestions.
+        try {
+            $weather = app(\Anwar\GunmaAgent\Services\WeatherService::class)
+                ->forLocation($ctx['prefecture'] ?? null);
+            if (!empty($weather)) {
+                $parts[] = "## WEATHER NOW\n- Location: " . ($ctx['prefecture'] ?? 'Japan')
+                    . "\n- Current: {$weather['summary']}"
+                    . "\n- Use this for weather-aware food suggestions (e.g. khichuri on a rainy/cold day, cold drinks on a hot day).";
+            }
+        } catch (\Exception $e) {
+            // ignore
+        }
+
         // User context
         if ($ctx) {
             $lines = [];
             $lines[] = "## CURRENT USER CONTEXT";
             if ($ctx['name']) $lines[] = "- Name: {$ctx['name']}";
             if ($ctx['email']) $lines[] = "- Email: {$ctx['email']}";
+            if (!empty($ctx['language'])) {
+                $script = $ctx['language_script'] ? " {$ctx['language_script']}" : '';
+                $rtlNote = !empty($ctx['language_rtl']) ? ' (right-to-left)' : '';
+                $lines[] = "- Preferred language: {$ctx['language']} ({$ctx['language_code']}){$rtlNote} — reply in this language{$script}";
+            }
+            if (!empty($ctx['prefecture'])) $lines[] = "- Location/prefecture: {$ctx['prefecture']}";
             if ($ctx['is_guest'] === false) $lines[] = "- Logged in: yes";
             else $lines[] = "- Logged in: no (guest)";
             if ($ctx['previous_orders'] > 0) $lines[] = "- Previous orders: {$ctx['previous_orders']}";
@@ -351,11 +374,23 @@ class AgentOrchestrator
         $loggedIn = ($ctx['is_guest'] ?? true) === false ? 'yes' : 'no';
         $checkoutUrl = rtrim($this->websiteUrl, '/') . '/checkout';
 
+        $language = $ctx['language'] ?? 'Bengali';
+        $languageLine = $language;
+        if (!empty($ctx['language_script'])) {
+            $languageLine .= ' ' . $ctx['language_script'];
+        }
         return <<<TXT
 ## HOW TO TALK (VERY IMPORTANT)
 Talk like a friendly shopkeeper at the next door dokan — warm, natural, casual.
 - Do NOT sound like a form or a robot. Use everyday words, short friendly sentences.
-- Speak in the customer's own language (Bangla, Japanese, English, etc.).
+- **LANGUAGE (default rule):** Reply in the customer's preferred language: {$languageLine}.
+  This is the default — most customers are South Asian living in Japan, so use their home
+  language with the correct script (Bengali, Devanagari/Hindi, Urdu right-to-left, Gurmukhi,
+  Tamil, Telugu, Sinhala, Nepali, etc.).
+- **Mirroring exception:** Only switch to another language if the customer clearly writes
+  their message in that language (e.g. they write fully in Japanese or English). Then mirror it.
+  If they mix languages, keep using the preferred language above.
+- Never reply in a language the customer cannot understand.
 - Tell a small "golpo kotha" (friendly chit-chat) while you work: e.g. "Aaj brishti, garam garam khichuri bhalo lage — chal ar dal ache, lagbe?"
 - Ask ONE natural follow-up question at a time instead of dumping everything.
 
@@ -414,41 +449,92 @@ TXT;
             'points' => 0,
             'cart_count' => 0,
             'insight' => null,
+            'language' => null,
+            'language_code' => null,
+            'language_script' => null,
+            'language_rtl' => false,
+            'country' => null,
+            'prefecture' => null,
         ];
 
-        if (!$session->customer_id) return $ctx;
+        $customer = null;
+        if ($session->customer_id) {
+            $ctx['is_guest'] = false;
+            try {
+                $customerModel = config('gunma-agent.models.customer');
+                if ($customerModel && class_exists($customerModel)) {
+                    $customer = $customerModel::find($session->customer_id);
+                    if ($customer) {
+                        $ctx['name'] = $ctx['name'] ?? $customer->name;
+                        $ctx['email'] = $ctx->email ?? $customer->email;
+                        $ctx['points'] = (int) ($customer->available_point ?? 0);
+                        $ctx['country'] = $customer->country ?? null;
 
-        $ctx['is_guest'] = false;
+                        $orderModel = config('gunma-agent.models.order');
+                        if ($orderModel && class_exists($orderModel)) {
+                            $ctx['previous_orders'] = $orderModel::where('customer_id', $customer->id)->count();
+                        }
 
-        try {
-            $customerModel = config('gunma-agent.models.customer');
-            if ($customerModel && class_exists($customerModel)) {
-                $customer = $customerModel::find($session->customer_id);
-                if ($customer) {
-                    $ctx['name'] = $ctx['name'] ?? $customer->name;
-                    $ctx['email'] = $ctx['email'] ?? $customer->email;
-                    $ctx['points'] = (int) ($customer->available_point ?? 0);
+                        $cartModel = config('gunma-agent.models.cart');
+                        if ($cartModel && class_exists($cartModel)) {
+                            $ctx['cart_count'] = $cartModel::where('customer_id', $customer->id)->count();
+                        }
 
-                    $orderModel = config('gunma-agent.models.order');
-                    if ($orderModel && class_exists($orderModel)) {
-                        $ctx['previous_orders'] = $orderModel::where('customer_id', $customer->id)->count();
+                        $insightService = app(\Anwar\GunmaAgent\Services\CustomerInsightService::class);
+                        $ctx['insight'] = $insightService->analyzeCustomer($customer->id);
                     }
-
-                    $cartModel = config('gunma-agent.models.cart');
-                    if ($cartModel && class_exists($cartModel)) {
-                        $ctx['cart_count'] = $cartModel::where('customer_id', $customer->id)->count();
-                    }
-
-                    // Purchase insight
-                    $insightService = app(\Anwar\GunmaAgent\Services\CustomerInsightService::class);
-                    $ctx['insight'] = $insightService->analyzeCustomer($customer->id);
                 }
+            } catch (\Exception $e) {
+                Log::warning('[Agent] User context fetch failed', ['error' => $e->getMessage()]);
             }
+        }
+
+        // Response language: profile → country → Accept-Language → default.
+        try {
+            $accept = request()?->header('Accept-Language');
+            $locale = app(\Anwar\GunmaAgent\Services\LocalizationService::class)->resolve($customer, $accept);
+            $ctx['language'] = $locale['name'];
+            $ctx['language_code'] = $locale['code'];
+            $ctx['language_script'] = $locale['script'] ?? null;
+            $ctx['language_rtl'] = (bool) ($locale['rtl'] ?? false);
         } catch (\Exception $e) {
-            Log::warning('[Agent] User context fetch failed', ['error' => $e->getMessage()]);
+            Log::debug('[Agent] Locale resolve failed', ['error' => $e->getMessage()]);
+        }
+
+        // Best-effort location (prefecture) for weather-aware suggestions.
+        try {
+            $ctx['prefecture'] = $this->resolvePrefecture($session);
+        } catch (\Exception $e) {
+            Log::debug('[Agent] Prefecture resolve failed', ['error' => $e->getMessage()]);
         }
 
         return $ctx;
+    }
+
+    /**
+     * Resolve a location string (prefecture/city/postcode) for the session's
+     * customer, used for weather-aware suggestions. Cheap + null-safe.
+     */
+    private function resolvePrefecture(ChatSession $session): ?string
+    {
+        if (! $session->customer_id) {
+            return null;
+        }
+
+        try {
+            $addressModel = config('gunma-agent.models.address', \App\Models\Address::class);
+            if (! $addressModel || ! class_exists($addressModel)) {
+                return null;
+            }
+            $address = $addressModel::where('customer_id', $session->customer_id)
+                ->orderByDesc('default')
+                ->orderByDesc('id')
+                ->first();
+
+            return $address?->state ?: $address?->postal_code ?: null;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /* ── Main Entry Point ──────────────────────────────────────── */

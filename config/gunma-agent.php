@@ -55,6 +55,97 @@ return [
         'fallback_base_url' => env('GUNMA_LLM_FALLBACK_BASE_URL', env('GUNMA_OPENAI_BASE_URL', 'https://api.openai.com/v1')),
         'fallback_api_key'  => env('GUNMA_LLM_FALLBACK_API_KEY', env('GUNMA_OPENAI_API_KEY')),
         'fallback_model'    => env('GUNMA_LLM_FALLBACK_MODEL', env('GUNMA_OPENAI_MODEL', 'gpt-4o-mini')),
+
+        /*
+        | Ollama Cloud allows only a few concurrent requests. A Redis-backed
+        | semaphore throttles outbound LLM calls to this many at once; extra
+        | requests wait (bounded) instead of failing.
+        */
+        'max_concurrency'   => (int) env('GUNMA_LLM_MAX_CONCURRENCY', 4),
+        'concurrency_wait'  => (int) env('GUNMA_LLM_CONCURRENCY_WAIT', 20), // seconds to wait for a slot
+        'concurrency_ttl'   => (int) env('GUNMA_LLM_CONCURRENCY_TTL', 180), // slot auto-release safety
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Customer Localization
+    |--------------------------------------------------------------------------
+    | Reply in the customer's preferred language. Resolved from the customer's
+    | native_language / country, then the request Accept-Language header, then
+    | a configurable default. The agent always mirrors the language the
+    | customer actually writes in as well.
+    */
+    'localization' => [
+        'default_language' => env('GUNMA_DEFAULT_LANGUAGE', 'bn'),
+
+        // Map language/region codes the host may store → human-readable name.
+        // Covers South Asian majority languages plus the main Japan-market ones.
+        'language_names' => [
+            // South Asia
+            'bn' => 'Bengali', 'bn-BD' => 'Bengali', 'bn-IN' => 'Bengali',
+            'hi' => 'Hindi', 'hi-IN' => 'Hindi',
+            'ur' => 'Urdu', 'ur-PK' => 'Urdu', 'ur-IN' => 'Urdu',
+            'pa' => 'Punjabi', 'pa-IN' => 'Punjabi', 'pa-PK' => 'Punjabi',
+            'gu' => 'Gujarati', 'mr' => 'Marathi', 'ta' => 'Tamil', 'te' => 'Telugu',
+            'kn' => 'Kannada', 'ml' => 'Malayalam', 'or' => 'Odia', 'as' => 'Assamese',
+            'si' => 'Sinhala', 'si-LK' => 'Sinhala', 'ne' => 'Nepali', 'ne-NP' => 'Nepali',
+            'sd' => 'Sindhi', 'ps' => 'Pashto', 'dv' => 'Dhivehi', 'mai' => 'Maithili',
+            'bh' => 'Bhojpuri', 'raj' => 'Rajasthani', 'ks' => 'Kashmiri',
+            // Japan / East & Southeast Asia
+            'ja' => 'Japanese', 'ja-JP' => 'Japanese',
+            'en' => 'English', 'en-US' => 'English', 'en-GB' => 'English', 'en-IN' => 'English',
+            'zh' => 'Chinese', 'zh-CN' => 'Chinese', 'ko' => 'Korean', 'vi' => 'Vietnamese',
+            'my' => 'Burmese', 'th' => 'Thai', 'id' => 'Indonesian', 'tl' => 'Filipino',
+            // Other common customer languages
+            'ar' => 'Arabic', 'fa' => 'Persian', 'tr' => 'Turkish', 'fr' => 'French',
+            'de' => 'German', 'es' => 'Spanish', 'pt' => 'Portuguese', 'ru' => 'Russian',
+        ],
+
+        // Script guidance so the model writes the correct writing system
+        // (crucial for Urdu RTL, Punjabi Gurmukhi, etc.). Keyed by language code.
+        'scripts' => [
+            'bn' => 'in Bengali script (বাংলা)',
+            'hi' => 'in Devanagari script (हिन्दी)',
+            'ur' => 'in Urdu script, right-to-left (اردو)',
+            'pa' => 'in Gurmukhi script (ਪੰਜਾਬੀ)',
+            'gu' => 'in Gujarati script (ગુજરાતી)',
+            'mr' => 'in Devanagari script (मराठी)',
+            'ta' => 'in Tamil script (தமிழ்)',
+            'te' => 'in Telugu script (తెలుగు)',
+            'kn' => 'in Kannada script (ಕನ್ನಡ)',
+            'ml' => 'in Malayalam script (മലയാളം)',
+            'or' => 'in Odia script (ଓଡ଼ିଆ)',
+            'as' => 'in Assamese script (অসমীয়া)',
+            'si' => 'in Sinhala script (සිංහල)',
+            'ne' => 'in Devanagari script (नेपाली)',
+            'sd' => 'in Sindhi script, right-to-left (سنڌي)',
+            'ps' => 'in Pashto script, right-to-left (پښتو)',
+            'ja' => 'in Japanese (日本語)',
+            'zh' => 'in Chinese (中文)',
+            'ko' => 'in Korean (한국어)',
+            'ar' => 'in Arabic, right-to-left (العربية)',
+            'fa' => 'in Persian, right-to-left (فارسی)',
+            'en' => 'in English',
+        ],
+
+        // Languages written right-to-left (affects formatting guidance).
+        'rtl' => ['ur', 'ar', 'fa', 'ps', 'sd', 'dv', 'ks'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Weather-aware suggestions
+    |--------------------------------------------------------------------------
+    | Optional. When enabled and a location is known, inject current weather so
+    | the agent can make weather-based food suggestions. Uses Open-Meteo (no key).
+    */
+    'weather' => [
+        'enabled' => env('GUNMA_WEATHER_ENABLED', true),
+        'timeout' => (int) env('GUNMA_WEATHER_TIMEOUT', 4),
+        'cache_ttl' => (int) env('GUNMA_WEATHER_CACHE_TTL', 1800), // 30 min
+        // Fallback coordinates (Gunma/Nara area) when only a prefecture is known.
+        'default_lat' => env('GUNMA_WEATHER_LAT', 36.32),
+        'default_lon' => env('GUNMA_WEATHER_LON', 139.00),
     ],
 
     /*
@@ -240,6 +331,7 @@ return [
         'post_code'  => env('GUNMA_MODEL_POST_CODE', \App\Models\PostCode::class),
         'review'     => env('GUNMA_MODEL_REVIEW', \App\Models\Review::class),
         'coupon'     => env('GUNMA_MODEL_COUPON', \App\Models\Coupon::class),
+        'address'    => env('GUNMA_MODEL_ADDRESS', \App\Models\Address::class),
     ],
 
     /*

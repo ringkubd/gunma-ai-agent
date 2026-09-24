@@ -26,6 +26,18 @@ class GunmaAgentServiceProvider extends ServiceProvider
 
         $this->app->singleton(\Anwar\GunmaAgent\Services\ChatwootService::class);
 
+        $this->app->singleton(\Anwar\GunmaAgent\Services\LocalizationService::class);
+
+        $this->app->singleton(\Anwar\GunmaAgent\Services\WeatherService::class);
+
+        $this->app->singleton(\Anwar\GunmaAgent\Services\ConcurrencyLimiter::class, function () {
+            return new \Anwar\GunmaAgent\Services\ConcurrencyLimiter(
+                maxConcurrency: (int) config('gunma-agent.llm.max_concurrency', 4),
+                waitSeconds:    (int) config('gunma-agent.llm.concurrency_wait', 20),
+                slotTtl:        (int) config('gunma-agent.llm.concurrency_ttl', 180),
+            );
+        });
+
         $this->app->singleton(EmbeddingService::class, function ($app) {
             return new EmbeddingService(
                 settings: $app->make(AgentSettingsService::class),

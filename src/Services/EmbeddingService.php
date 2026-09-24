@@ -123,10 +123,13 @@ class EmbeddingService
         }
 
         try {
-            $response = $request->post("{$baseUrl}/embeddings", [
-                'input' => $texts,
-                'model' => $model,
-            ]);
+            // Throttle embeddings too — they hit the same provider limits.
+            $response = app(\Anwar\GunmaAgent\Services\ConcurrencyLimiter::class)->run(
+                fn () => $request->post("{$baseUrl}/embeddings", [
+                    'input' => $texts,
+                    'model' => $model,
+                ])
+            );
         } catch (\Exception $e) {
             $this->openCircuit();
             throw $e;

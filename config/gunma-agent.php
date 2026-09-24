@@ -57,6 +57,7 @@ return [
         'api_key'  => env('GUNMA_EMBEDDING_API_KEY', 'ollama'),
         'model'    => env('GUNMA_EMBEDDING_MODEL', 'nomic-embed-text'),
         'dims'     => (int) env('GUNMA_EMBEDDING_DIMS', 768),
+        'batch_size' => (int) env('GUNMA_EMBEDDING_BATCH_SIZE', 32),
     ],
 
     /*

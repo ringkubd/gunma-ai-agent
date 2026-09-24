@@ -34,7 +34,8 @@ class EmbeddingService
     }
 
     /**
-     * Embed multiple texts in a single API call.
+     * Embed multiple texts in a single API call, chunked to avoid provider
+     * payload/time limits on large batches.
      *
      * @param  string[]  $texts
      * @return array<int,array<int,float>>
@@ -45,11 +46,27 @@ class EmbeddingService
             return [];
         }
 
+        $chunkSize = (int) config('gunma-agent.embedding.batch_size', 32);
+        $out = [];
+        foreach (array_chunk($texts, max(1, $chunkSize)) as $chunk) {
+            foreach ($this->embedChunk($chunk) as $vector) {
+                $out[] = $vector;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @param  string[]  $texts
+     * @return array<int,array<int,float>>
+     */
+    private function embedChunk(array $texts): array
+    {
         $baseUrl = rtrim((string) $this->settings->get('embedding_base_url', config('gunma-agent.embedding.base_url')), '/');
         $apiKey  = (string) $this->settings->get('embedding_api_key', config('gunma-agent.embedding.api_key'));
         $model   = (string) $this->settings->get('embedding_model', config('gunma-agent.embedding.model'));
 
-        $request = Http::timeout(60)->acceptJson();
+        $request = Http::timeout(180)->acceptJson();
 
         // Local Ollama ignores the key, but sending a dummy is harmless; skip it
         // entirely when blank to avoid confusing strict gateways.
@@ -67,7 +84,7 @@ class EmbeddingService
                 'provider' => $this->settings->get('embedding_provider'),
                 'model'    => $model,
                 'status'   => $response->status(),
-                'body'     => $response->body(),
+                'body'     => mb_substr($response->body(), 0, 500),
             ]);
             throw new \RuntimeException('Embedding failed: ' . $response->body());
         }

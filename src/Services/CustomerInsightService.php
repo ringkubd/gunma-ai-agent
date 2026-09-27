@@ -84,8 +84,8 @@ class CustomerInsightService
 
             return DB::table('order_items')
                 ->join('products', 'order_items.product_id', '=', 'products.id')
-                ->join('category_product', 'products.id', '=', 'category_product.product_id')
-                ->join('categories', 'category_product.category_id', '=', 'categories.id')
+                ->join('product_categories', 'products.id', '=', 'product_categories.product_id')
+                ->join('categories', 'product_categories.category_id', '=', 'categories.id')
                 ->whereIn('order_items.order_id', $orderIds)
                 ->select('categories.title', DB::raw('COUNT(DISTINCT order_items.order_id) as order_count'))
                 ->groupBy('categories.title')

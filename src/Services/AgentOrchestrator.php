@@ -562,18 +562,41 @@ class AgentOrchestrator
         if (!empty($ctx['language_script'])) {
             $languageLine .= ' ' . $ctx['language_script'];
         }
+
+        // Japan-based shop: many visitors are Japanese or other nationalities.
+        // When we actually know the customer's language (profile/country/Accept-
+        // Language), prefer it; otherwise mirror whatever they write — never
+        // blanket-Bangla every visitor.
+        $source = $ctx['language_source'] ?? 'default';
+        if ($source === 'profile' || $source === 'country') {
+            $languageRule = "- **LANGUAGE (dominant rule):** Always reply in the customer's stored preference: {$languageLine}.
+  This applies even when the customer writes their message in English or a short greeting —
+  do NOT default to English. Most regulars are South Asian living in Japan and expect their
+  home language with the correct script (Bengali, Devanagari/Hindi, Urdu right-to-left,
+  Gurmukhi, Tamil, Telugu, Kannada, Malayalam, Sinhala, Nepali, etc.).
+
+  - **Only exception:** If the customer writes a FULL message in a different language
+    (e.g. a complete Japanese sentence), mirror that language for the reply.
+    A short English word like \"hello\" or \"ok\" is NOT a reason to switch languages.";
+        } else {
+            $languageRule = "- **LANGUAGE (MIRROR rule — this visitor's language is NOT stored):** The store is in
+  Japan and ANY Japanese person (or any nationality) may order or chat. Reply in the language
+  the CUSTOMER writes and understands — this ALWAYS beats any locale default:
+    - Japanese message → Japanese reply. English → English. Banglish → Banglish (roman).
+    - Native Bangla script → Bangla script. Hindi/Urdu/Nepali/etc. → same language.
+    - Mixed Banglish+English is normal South-Asian style — mirror the CUSTOMER's exact style.
+  So a French/Japanese/English visitor ALWAYS gets French/Japanese/English — never blanket
+  Bengali, and never blanket Japanese either. Once the visitor's language is clear in this
+  conversation, keep replying in that language on every turn.
+  Only when the message has NO language at all (e.g bare \"ok\", \".\", \"hmm\") fall back to
+  the language already established in THIS conversation, else the site locale ({$languageLine}),
+  else friendly English.";
+        }
         return <<<TXT
 ## HOW TO TALK (VERY IMPORTANT)
 Talk like a friendly shopkeeper at the next door dokan — warm, natural, casual.
 - Do NOT sound like a form or a robot. Use everyday words, short friendly sentences.
-- **LANGUAGE (dominant rule):** Always reply in the customer's preferred language: {$languageLine}.
-  This applies even when the customer writes their message in English or a short greeting —
-  do NOT default to English. Most customers are South Asian living in Japan and expect their
-  home language with the correct script (Bengali, Devanagari/Hindi, Urdu right-to-left,
-  Gurmukhi, Tamil, Telugu, Kannada, Malayalam, Sinhala, Nepali, etc.).
-- **Only exception:** If the customer writes a FULL sentence in a different language
-  (e.g. a complete Japanese sentence), you may mirror that language for that reply.
-  A short English word like "hello" or "ok" is NOT a reason to switch to English.
+{$languageRule}
 - Never reply in a language the customer cannot understand.
 - Tell a small "golpo kotha" (friendly chit-chat) while you work, but keep it VARIED and relevant to what the customer actually asked — never repeat the same dish or sentence.
 - Ask ONE natural follow-up question at a time instead of dumping everything.
@@ -583,6 +606,11 @@ Talk like a friendly shopkeeper at the next door dokan — warm, natural, casual
 - Never suggest the same dish twice in a row or across turns. Check the conversation and your previous suggestions, and move on to something different.
 - Match the dish to the customer's REQUEST: if they name a dish, cuisine, ingredient, or occasion, suggest exactly that category. If they are vague, offer a DIFFERENT option each time (e.g. biryani, karahi, roast, curry, kebab, pulao, noodles, dosa, dessert…).
 - Prefer the customer's own language/cuisine tastes and what is actually in stock. Do not overuse any single dish, ingredient, or phrase.
+
+## OUT-OF-STOCK PRESENTATION (IMPORTANT)
+- When a product the customer asks for has stock 0, DO NOT hide it. Show it and clearly say it is currently out of stock with the store's usual promise that it restocks soon — e.g. "এই প্রোডাক্টটি এখন স্টকে নেই, খুব দ্রুত আবার স্টক করা হবে" / "Eita ekhon nei bhai, khub shigroi abar stock e ashbe".
+- Then naturally offer: the closest alternative that IS in stock, and to let them know/add it once restocked.
+- NEVER invent fake stock numbers, and NEVER show product ids/titles of INACTIVE or store-delisted products as purchasable — inactive items simply don't exist anymore.
 
 ## MATCH THE WRITING STYLE (script vs Banglish) — VERY IMPORTANT
 Customers often type in **romanized South Asian languages** ("Banglish", "Hinglish",
@@ -611,6 +639,9 @@ When the customer speaks naturally, YOU decide and call the right tools automati
 - "delivery kobe / koto din" → check_delivery_time / check_stock_availability with post code.
 - "kichu jante chai / info" → search_support_kb, then answer conversationally.
 - "problem / complaint / payment issue" → create_support_ticket; missing/damaged → create_order_claim.
+- "password bhule gechi / change password / forgot password" → search_support_kb for the exact steps; if they actually want to log in, call open_login (the login form opens inside chat — never push them to a website just for this).
+- Cart engineering: "remove koro/bad diye dao" → remove_item_from_cart; "2 ta koro/ek maal byobohar" → update_cart_quantity; "cart khali koro" → clear_cart.
+- Weather gossip: never claim actual rain/temperature/sun unless the WEATHER NOW context is present for this customer — if you don't know their location, say honestly you can't see their weather and ask which city they're in.
 - "recipe / ranna" → search_recipes then search_products_bulk for the ingredients ({{BULK_BUTTON}} list).
 - Cart-aware help: whenever a customer wants suggestions, "what should I cook?", or a complement, FIRST call `get_cart_contents` and build on what they already have (e.g. "chal ar dal ache — mangsho/masala add korle tehari hobe").
 Never ask "should I use a tool?" — just use it and reply naturally with the result.
@@ -725,6 +756,7 @@ TXT;
             $ctx['language_code'] = $locale['code'];
             $ctx['language_script'] = $locale['script'] ?? null;
             $ctx['language_rtl'] = (bool) ($locale['rtl'] ?? false);
+            $ctx['language_source'] = $locale['source'] ?? 'default';
         } catch (\Exception $e) {
             Log::debug('[Agent] Locale resolve failed', ['error' => $e->getMessage()]);
         }

@@ -25,9 +25,9 @@ class ToolExecutor
         Log::info("[ToolExecutor] {$functionName}", $args);
 
         return match ($functionName) {
-            'search_products_bulk'           => $this->qdrantService->searchProductsBulk($args['queries'] ?? []),
+            'search_products_bulk'           => $this->decorateStock($this->qdrantService->searchProductsBulk($args['queries'] ?? [])),
             'get_product_details'            => $this->getProductDetails($args),
-            'filter_products'                => $this->filterProducts($args),
+            'filter_products'                => $this->decorateStock($this->filterProducts($args)),
             'search_recipes'                 => $this->qdrantService->searchRecipes($args['query'] ?? ''),
             'search_support_kb'              => $this->qdrantService->searchSupportKB($args['query'] ?? ''),
             'cache_new_recipe'               => $this->cacheNewRecipe($args),
@@ -43,7 +43,7 @@ class ToolExecutor
             'create_support_ticket'          => $this->createSupportTicket($args),
             'check_delivery_time'            => $this->checkDeliveryTime($args),
             'check_stock_availability'       => $this->checkStockAvailability($args),
-            'get_trending_products'          => $this->getTrendingProducts($args),
+            'get_trending_products'          => $this->decorateStock($this->getTrendingProducts($args)),
             'get_cart_contents'              => $this->getCartContents(),
             'apply_coupon'                   => $this->applyCoupon($args),
             'submit_product_review'          => $this->submitProductReview($args),
@@ -473,7 +473,7 @@ class ToolExecutor
      * Shared cart identity for all cart tools: logged-in customer, else guest
      * cookie id. Returns null -> not identifiable (guest without cart session).
      */
-    private function cartIdentity(object $cartModel): ?array
+    private function cartIdentity(): ?array
     {
         $customer = auth('customer')->user();
         if ($customer) {
@@ -807,6 +807,70 @@ class ToolExecutor
         ];
     }
 
+    /**
+     * Stamp every product hit with a live, DB-verified in_stock flag so the
+     * model can never accidentally present an out-of-stock item as buyable.
+     * Also annotates the hit title with "(out of stock)" for extra safety.
+     */
+    private function decorateStock(mixed $result): mixed
+    {
+        try {
+            if (is_array($result)) {
+                $this->sniffAndStamp($result);
+            }
+        } catch (\Throwable) {
+            // Best-effort decoration only — never break the tool.
+        }
+        return $result;
+    }
+
+    private function sniffAndStamp(array &$array, int $depth = 0): void
+    {
+        if ($depth > 4) {
+            return;
+        }
+        $productIds = [];
+        foreach ($array as $key => $value) {
+            if (is_array($value)) {
+                if (isset($value['product_id'])) {
+                    $productIds[$key] = (int) $value['product_id'];
+                } elseif (isset($value['id']) && is_numeric($value['id']) && isset($value['title'])) {
+                    $productIds[$key] = (int) $value['id'];
+                }
+            }
+        }
+        if ($productIds) {
+            $cartModel = $this->getModelClass('product', \App\Models\Product::class);
+            if ($cartModel && class_exists($cartModel)) {
+                $rows = $cartModel::with('latestStock')
+                    ->whereIn('id', array_values(array_unique($productIds)))
+                    ->get()
+                    ->keyBy('id');
+                foreach ($productIds as $key => $pid) {
+                    $p = $rows[$pid] ?? null;
+                    $stock = $p?->latestStock?->available_quantity ?? 0;
+                    $inStock = (int) $stock > 0
+                        && ($p->status ?? '') === 'Active'
+                        && ($p->is_online_available ?? 'Yes') === 'Yes';
+                    $array[$key]['in_stock'] = $inStock;
+                    $array[$key]['stock'] = (int) $stock;
+                    if (! $inStock && isset($array[$key]['title']) && strpos((string) $array[$key]['title'], '(out of stock)') === false
+                        && strpos((string) $array[$key]['title'], '(not in stock') === false) {
+                        $array[$key]['title'] = (string) $array[$key]['title'] . ' (out of stock)';
+                    }
+                }
+            }
+        }
+        foreach ($array as $key => $value) {
+            if (is_array($value) && isset($value['results']) || (is_array($value) && array_is_list($array))) {
+                // recurse into grouped structures (search_products_bulk groups)
+            }
+            if (is_array($value)) {
+                $this->sniffAndStamp($array[$key], $depth + 1);
+            }
+        }
+    }
+
     /* ── Cart management tools (works for customers AND guests) ── */
 
     private function removeItemFromCart(array $args): array
@@ -817,7 +881,7 @@ class ToolExecutor
         $cartModel = $this->getModelClass('cart', \App\Models\Cart::class);
         if (!$cartModel) return ['error' => 'Cart system unavailable.'];
 
-        $identity = $this->cartIdentity($cartModel);
+        $identity = $this->cartIdentity();
         if (!$identity) return ['error' => 'Your cart is empty.'];
 
         $item = $cartModel::where('product_id', $productId)
@@ -844,7 +908,7 @@ class ToolExecutor
         $cartModel = $this->getModelClass('cart', \App\Models\Cart::class);
         if (!$cartModel) return ['error' => 'Cart system unavailable.'];
 
-        $identity = $this->cartIdentity($cartModel);
+        $identity = $this->cartIdentity();
         if (!$identity) return ['error' => 'Your cart is empty.'];
 
         $item = $cartModel::where('product_id', $productId)
@@ -885,7 +949,7 @@ class ToolExecutor
         $cartModel = $this->getModelClass('cart', \App\Models\Cart::class);
         if (!$cartModel) return ['error' => 'Cart system unavailable.'];
 
-        $identity = $this->cartIdentity($cartModel);
+        $identity = $this->cartIdentity();
         if (!$identity) return ['error' => 'Your cart is already empty.'];
 
         $deleted = $cartModel::where('product_option_id', '')

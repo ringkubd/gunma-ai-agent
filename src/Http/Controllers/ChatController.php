@@ -541,6 +541,51 @@ class ChatController extends Controller
     }
 
     /**
+     * Live "customer heartbeat": the widget pings where the customer currently
+     * is (URL + product they're viewing). Stored in customer_activities so the
+     * interest pipeline AND Piku both know what the person is looking at.
+     */
+    public function pageContext(Request $request, string $id): JsonResponse
+    {
+        $session = ChatSession::findOrFail($id);
+        $this->assertSessionOwnership($request, $session);
+
+        $validated = $request->validate([
+            'page_url'   => 'nullable|string|max:500',
+            'title'      => 'nullable|string|max:255',
+            'product_id' => 'nullable|integer',
+            'action'     => 'nullable|in:page_view,product_view,heartbeat',
+            'referrer'   => 'nullable|string|max:500',
+        ]);
+
+        $customerId = $session->customer_id ? (int) $session->customer_id : null;
+        $visitorId  = (string) ($session->visitor_id ?? '');
+        $action     = $validated['action'] ?? (! empty($validated['product_id']) ? 'product_view' : 'navigation');
+
+        try {
+            if (DB::getSchemaBuilder()->hasTable('customer_activities')) {
+                DB::table('customer_activities')->insert([
+                    'customer_id' => $customerId,
+                    'visitor_id'  => $visitorId,
+                    'session_id'  => $session->id,
+                    'product_id'  => $validated['product_id'] ?? null,
+                    'action'      => $action,
+                    'page_url'    => $validated['page_url'] ?? null,
+                    'referrer'    => $validated['referrer'] ?? null,
+                    'metadata'    => $validated['title'] ?? null,
+                    'logged_at'   => now(),
+                    'created_at'  => now(),
+                    'updated_at'  => now(),
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[Chat] page-context log failed', ['error' => $e->getMessage()]);
+        }
+
+        return response()->json(['status' => 'success']);
+    }
+
+    /**
      * Bulk Add to Cart — writes to the SAME cart table the storefront reads,
      * using the same identity rules as App\Http\Controllers\Frontend\CartAPIController:
      * authenticated customers by customer_id, guests by the encrypted `guest_id`

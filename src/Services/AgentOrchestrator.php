@@ -443,6 +443,30 @@ class AgentOrchestrator
 
         $lines = [];
 
+        // 0. LIVE PAGE — what they are looking at right now (≤45 min heartbeat)
+        $lastView = null;
+        foreach (($profile['activity']['recent'] ?? []) as $ra) {
+            if (in_array($ra['action'] ?? '', ['product_view', 'page_view', 'navigation'], true)) {
+                $lastView = $ra;
+                break;
+            }
+        }
+        if ($lastView) {
+            $isProduct = in_array($lastView['action'] ?? '', ['product_view'], true);
+            $label = $lastView['title'] ?? ($lastView['product_id'] ? ('product #' . $lastView['product_id']) : null);
+            $whenMin = null;
+            try {
+                $whenMin = (int) round((time() - strtotime((string) $lastView['logged_at'])) / 60);
+            } catch (\Throwable) {}
+            $whenTxt = ($whenMin !== null && $whenMin >= 0) ? ($whenMin <= 45 ? ("{$whenMin} min ago") : null) : null;
+            if ($label) {
+                $lines[] = "- 🔴 LIVE NOW: the customer is currently looking at \"{$label}\""
+                    . ($lastView['page_url'] ? " ({$lastView['page_url']})" : '')
+                    . ($whenTxt ? " — since {$whenTxt}" : '')
+                    . ' — it is natural to mention THIS product/dish naturally, offer its ingredients, or a matching recipe. Do not dump a big list about it unprompted.';
+            }
+        }
+
         // 1. Person (account details)
         $c = $profile['customer'] ?? null;
         if ($c) {

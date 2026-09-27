@@ -186,6 +186,7 @@ class CustomerProfileService
             }
 
             $q = DB::table('customer_activities');
+            $titles = [];
             if ($customerId) {
                 $q->where('customer_id', $customerId);
             } elseif ($visitorId !== '') {
@@ -195,14 +196,37 @@ class CustomerProfileService
             }
 
             $recent = (clone $q)->orderByDesc('logged_at')->limit(25)->get()
-                ->map(fn ($a) => [
-                    'action'    => $a->action,
-                    'query'     => $a->query,
-                    'page_url'  => $a->page_url,
-                    'product_id'=> $a->product_id,
-                    'prefecture'=> $a->prefecture,
-                    'logged_at' => (string) $a->logged_at,
-                ])->toArray();
+                ->map(function ($a) use (&$titles) {
+                    $row = [
+                        'action'    => $a->action,
+                        'query'     => $a->query,
+                        'page_url'  => $a->page_url,
+                        'product_id'=> $a->product_id,
+                        'title'     => null,
+                        'prefecture'=> $a->prefecture,
+                        'logged_at' => (string) $a->logged_at,
+                    ];
+                    if (! empty($row['product_id'])) {
+                        $titles[$row['product_id']] = $row['product_id'];
+                    }
+                    return $row;
+                })->toArray();
+
+            // Resolve once for all product_view rows (dashboard + Piku context).
+            if (! empty($titles)) {
+                try {
+                    $map = DB::table('products')->whereIn('id', array_map('intval', $titles))->pluck('title', 'id')->all();
+                    foreach ($titles as $pid => $t) {
+                        if (isset($map[$pid])) $titles[$pid] = $map[$pid];
+                    }
+                } catch (\Throwable $e) {}
+                foreach ($recent as &$r) {
+                    if (! empty($r['product_id']) && isset($titles[$r['product_id']])) {
+                        $r['title'] = $titles[$r['product_id']];
+                    }
+                }
+                unset($r);
+            }
 
             $byAction = (clone $q)
                 ->select('action', DB::raw('COUNT(*) as c'))

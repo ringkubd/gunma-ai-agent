@@ -37,6 +37,7 @@ Route::prefix($prefix)
         Route::post('/sessions/{id}/typing', [ChatController::class, 'typing']);
         Route::get('/sessions/{id}/messages', [ChatController::class, 'getMessages']);
         Route::put('/sessions/{id}/profile', [ChatController::class, 'updateGuestProfile']);
+        Route::post('/sessions/{id}/page-context', [ChatController::class, 'pageContext']);
         Route::post('/cart/bulk', [ChatController::class, 'bulkAddToCart']);
     });
 

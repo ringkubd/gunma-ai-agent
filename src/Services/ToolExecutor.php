@@ -885,16 +885,19 @@ class ToolExecutor
         if (!$identity) return ['error' => 'Your cart is empty.'];
 
         $item = $cartModel::where('product_id', $productId)
-            ->where('product_option_id', '')
             ->where($identity)
             ->first();
 
         if (!$item) return ['error' => 'That item is not in your cart.'];
 
         $title = $item->product->title ?? ("#" . $productId);
-        $item->delete();
+        // Delete every variant row of this product for this owner
+        // (option rows share the product_id; an item can be stored multiple times).
+        $cartModel::where('product_id', $productId)
+            ->where($identity)
+            ->delete();
 
-        return ['status' => 'success', 'message' => "Removed {$title} from your cart."];
+        return ['status' => 'success', 'message' => "Removed {$title} (all variants) from your cart."];
     }
 
     private function updateCartQuantity(array $args): array
@@ -912,8 +915,8 @@ class ToolExecutor
         if (!$identity) return ['error' => 'Your cart is empty.'];
 
         $item = $cartModel::where('product_id', $productId)
-            ->where('product_option_id', '')
             ->where($identity)
+            ->orderBy('id')
             ->first();
 
         if (!$item) return ['error' => 'That item is not in your cart.'];
@@ -952,9 +955,7 @@ class ToolExecutor
         $identity = $this->cartIdentity();
         if (!$identity) return ['error' => 'Your cart is already empty.'];
 
-        $deleted = $cartModel::where('product_option_id', '')
-            ->where($identity)
-            ->delete();
+        $deleted = $cartModel::where($identity)->delete();
 
         return [
             'status' => 'success',

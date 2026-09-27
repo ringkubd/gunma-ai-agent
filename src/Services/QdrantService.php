@@ -181,9 +181,67 @@ class QdrantService
     {
         try {
             $vector = $this->embeddingService->ollamaEmbed($query);
-            return $this->vectorSearch($this->collections['recipes'], $vector, $limit);
+            $results = $this->vectorSearch($this->collections['recipes'], $vector, $limit);
+            if (!empty($results)) {
+                return $results;
+            }
         } catch (\Exception $e) {
             Log::warning('[QdrantService] Recipe search failed', ['error' => $e->getMessage()]);
+        }
+
+        // Fallback: keyword search over the bundled recipe JSON so recipe help
+        // still works when Qdrant or the embedding provider is unavailable.
+        return $this->fallbackRecipeSearch($query, $limit);
+    }
+
+    /**
+     * Lightweight keyword search over the bundled resources/recipes.json.
+     * Returns the same hit shape as vectorSearch ([payload, score, ...]).
+     */
+    private function fallbackRecipeSearch(string $query, int $limit = 3): array
+    {
+        try {
+            $file = dirname(__DIR__, 2) . '/resources/recipes.json';
+            if (! is_file($file)) {
+                return [];
+            }
+            $recipes = json_decode((string) file_get_contents($file), true);
+            if (! is_array($recipes) || empty($recipes)) {
+                return [];
+            }
+
+            $tokens = array_values(array_filter(preg_split('/[^a-z0-9]+/i', mb_strtolower($query)) ?: [], fn ($t) => strlen($t) > 2));
+            if (empty($tokens)) {
+                return [];
+            }
+
+            $scored = [];
+            foreach ($recipes as $recipe) {
+                $haystack = mb_strtolower(
+                    ($recipe['title'] ?? '') . ' '
+                    . implode(' ', $recipe['ingredients'] ?? []) . ' '
+                    . ($recipe['cuisine'] ?? '') . ' '
+                    . ($recipe['category'] ?? '')
+                );
+                $score = 0;
+                foreach ($tokens as $token) {
+                    if (str_contains($haystack, $token)) {
+                        $score += 1;
+                    }
+                    if (str_contains(mb_strtolower((string) ($recipe['title'] ?? '')), $token)) {
+                        $score += 2;
+                    }
+                }
+                if ($score > 0) {
+                    $scored[] = ['payload' => $recipe, 'score' => $score / (count($tokens) * 3)];
+                }
+            }
+
+            usort($scored, fn ($a, $b) => $b['score'] <=> $a['score']);
+
+            return array_slice($scored, 0, $limit);
+        } catch (\Throwable $e) {
+            Log::warning('[QdrantService] Recipe JSON fallback failed', ['error' => $e->getMessage()]);
             return [];
         }
     }
@@ -210,7 +268,7 @@ class QdrantService
     {
         $text   = ($recipe['title'] ?? '') . ' ' . implode(', ', $recipe['ingredients'] ?? []);
         $vector = $this->embeddingService->ollamaEmbed($text);
-        
+
         $this->bulkUpsert($this->collections['recipes'], [
             [
                 'id'      => $this->generateUuid(md5($recipe['title'] ?? microtime())),
@@ -218,6 +276,54 @@ class QdrantService
                 'payload' => $recipe,
             ]
         ]);
+    }
+
+    /**
+     * Bulk-upsert many recipes with ONE batched embedding call per chunk.
+     * Deterministic IDs (md5 of title) keep re-seeds idempotent.
+     *
+     * @param array<int,array<string,mixed>> $recipes
+     */
+    public function upsertRecipesBulk(array $recipes, int $batch = 32): int
+    {
+        if (empty($recipes)) {
+            return 0;
+        }
+
+        $texts = array_map(
+            fn ($r) => trim(($r['title'] ?? '') . ' ' . ($r['cuisine'] ?? '') . ' ' . ($r['category'] ?? '') . ' ' . implode(', ', $r['ingredients'] ?? [])),
+            $recipes
+        );
+
+        $embedded = 0;
+        foreach (array_chunk($recipes, max(1, $batch), true) as $chunkIndex => $chunk) {
+            $sliceTexts = array_slice($texts, $chunkIndex * $batch, count($chunk));
+            try {
+                $vectors = $this->embeddingService->embedBulk($sliceTexts);
+            } catch (\Throwable $e) {
+                Log::error('[QdrantService] Recipe bulk embedding failed', ['error' => $e->getMessage()]);
+                continue;
+            }
+
+            $points = [];
+            foreach (array_values($chunk) as $i => $recipe) {
+                $vector = $vectors[$i] ?? null;
+                if (empty($vector) || count($vector) < 64) {
+                    continue;
+                }
+                $points[] = [
+                    'id'      => $this->generateUuid(md5($recipe['title'] ?? microtime())),
+                    'vector'  => $vector,
+                    'payload' => $recipe,
+                ];
+            }
+            if (! empty($points)) {
+                $this->bulkUpsert($this->collections['recipes'], $points);
+                $embedded += count($points);
+            }
+        }
+
+        return $embedded;
     }
 
     /**
@@ -422,15 +528,30 @@ class QdrantService
     /**
      * Search past conversation memories for similar Q&As to augment context.
      */
-    public function searchMemories(string $query, int $limit = 3): array
+    public function searchMemories(string $query, int $limit = 3, ?int $customerId = null): array
     {
+        // Only ever recall a *logged-in customer's own* past conversations.
+        // Guest traffic is intentionally excluded so one visitor's Q&A can never
+        // leak into another visitor's context.
+        if (! $customerId) {
+            return [];
+        }
+
         try {
             $vector = $this->embeddingService->ollamaEmbed($query);
-            $results = $this->vectorSearch($this->collections['memories'], $vector, $limit);
+            $raw = $this->vectorSearch($this->collections['memories'], $vector, $limit * 3);
             $memories = [];
-            foreach ($results as $hit) {
-                if (($hit['score'] ?? 0) >= 0.85) {
-                    $memories[] = $hit['payload'];
+            foreach ($raw as $hit) {
+                if (($hit['score'] ?? 0) < 0.85) {
+                    continue;
+                }
+                $payload = $hit['payload'] ?? [];
+                if ((int) ($payload['customer_id'] ?? 0) !== (int) $customerId) {
+                    continue;
+                }
+                $memories[] = $payload;
+                if (count($memories) >= $limit) {
+                    break;
                 }
             }
             return $memories;
@@ -443,7 +564,7 @@ class QdrantService
     /**
      * Index a conversation memory for future RAG use.
      */
-    public function indexMemory(string $sessionId, string $query, string $answer): void
+    public function indexMemory(string $sessionId, string $query, string $answer, ?int $customerId = null): void
     {
         try {
             $collection = $this->collections['memories'];
@@ -455,10 +576,11 @@ class QdrantService
                     'id' => $this->generateUuid(md5($sessionId . microtime())),
                     'vector' => $vector,
                     'payload' => [
-                        'session_id' => $sessionId,
-                        'query'      => $query,
-                        'answer'     => $answer,
-                        'timestamp'  => now()->toIso8601String(),
+                        'session_id'  => $sessionId,
+                        'customer_id' => $customerId,
+                        'query'       => $query,
+                        'answer'      => $answer,
+                        'timestamp'   => now()->toIso8601String(),
                     ]
                 ]
             ]);

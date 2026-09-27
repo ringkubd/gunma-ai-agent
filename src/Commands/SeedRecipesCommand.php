@@ -63,17 +63,7 @@ class SeedRecipesCommand extends Command
 
         $bar = $this->output->createProgressBar(count($recipes));
         $bar->start();
-        $ok = 0;
-        foreach ($recipes as $recipe) {
-            try {
-                $this->qdrantService->upsertRecipe($recipe);
-                $ok++;
-            } catch (\Throwable $e) {
-                $this->newLine();
-                $this->warn("Failed: " . ($recipe['title'] ?? '?') . ' — ' . $e->getMessage());
-            }
-            $bar->advance();
-        }
+        $ok = $this->qdrantService->upsertRecipesBulk($recipes);
         $bar->finish();
         $this->newLine(2);
 

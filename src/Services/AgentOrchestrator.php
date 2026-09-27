@@ -134,6 +134,48 @@ class AgentOrchestrator
     }
 
     /**
+     * Semantic cache is global (shared across all visitors), so it must NEVER be
+     * used for personalized or action replies — otherwise one customer's order /
+     * address / account answer could be served to someone else. Only cache
+     * generic, non-personal questions from guests.
+     */
+    private function shouldUseSemanticCache(ChatSession $session, string $message): bool
+    {
+        if (! config('gunma-agent.semantic_cache_enabled', true)) {
+            return false;
+        }
+
+        // Never cache for logged-in customers (replies may contain their data).
+        if ($session->customer_id) {
+            return false;
+        }
+
+        $m = mb_strtolower(trim($message));
+        if (mb_strlen($m) < 15) {
+            return false;
+        }
+
+        if ($this->isActionIntent($m)) {
+            return false;
+        }
+
+        // Personal / transactional topics must always be answered fresh.
+        $personal = [
+            'order', 'cart', 'amar', 'amake', 'account', 'address', 'thikana', 'payment',
+            'delivery', 'tracking', 'ticket', 'refund', 'wallet', 'point', 'login', 'logout',
+            'register', 'email', 'phone', 'mobile', 'password', 'invoice', 'receive', 'my ',
+            'অর্ডার', 'কার্ট', 'অ্যাকাউন্ট', 'ঠিকানা', 'টাকা', 'ডেলিভারি',
+        ];
+        foreach ($personal as $needle) {
+            if (str_contains($m, $needle)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Extract image URLs from a message (supports markdown ![](url) and the
      * widget's [IMAGE: url] marker).
      *
@@ -299,7 +341,11 @@ class AgentOrchestrator
         $nowLines[] = "- Time: " . date('l, H:i');
         $nowLines[] = "- Period: " . $triggers['time_period'];
         $nowLines[] = "- Season: " . $triggers['season'];
-        if (!empty($triggers['seasonal_suggestions'])) $nowLines[] = "- Seasonal items in demand: " . implode(', ', array_slice($triggers['seasonal_suggestions'], 0, 5));
+        if (!empty($triggers['seasonal_suggestions'])) {
+            $seasonal = $triggers['seasonal_suggestions'];
+            shuffle($seasonal);
+            $nowLines[] = "- In-demand staples this period (use as BACKGROUND suggestions only, vary them, never repeat one dish): " . implode(', ', array_slice($seasonal, 0, 4));
+        }
         if ($triggers['ramadan_coming']) $nowLines[] = "- RAMADAN COMING: Be proactive about dates, semai, chola, haleem ingredients.";
         if ($triggers['eid_coming']) $nowLines[] = "- EID COMING: Suggest premium cuts, sweets, cooking essentials.";
         $parts[] = implode("\n", $nowLines);
@@ -311,7 +357,8 @@ class AgentOrchestrator
             if (!empty($weather)) {
                 $parts[] = "## WEATHER NOW\n- Location: " . ($ctx['prefecture'] ?? 'Japan')
                     . "\n- Current: {$weather['summary']}"
-                    . "\n- Use this for weather-aware food suggestions (e.g. khichuri on a rainy/cold day, cold drinks on a hot day).";
+                    . "\n- You MAY reflect the weather in a light, varied way (warm comfort food on a cold/rainy day, cool items on a hot day). "
+                    . "Never default to the same dish (e.g. do NOT keep suggesting khichuri). Pick from the customer's actual request or wide general variety.";
             }
         } catch (\Exception $e) {
             // ignore
@@ -357,11 +404,147 @@ class AgentOrchestrator
             $parts[] = implode("\n", $lines);
         }
 
+        // Full 360° profile (orders, cart, addresses, behaviour, long-term
+        // interests) — so the agent talks like a person who already knows
+        // this customer and their tastes.
+        $profileContext = $this->buildProfileContext($session);
+        if ($profileContext !== null) {
+            $parts[] = $profileContext;
+        }
+
         $parts[] = "## PRODUCT FORMAT\nWhen listing products, use numbered list with clickable product name links:\n1. [Product Name]({$this->websiteUrl}/slug) - ¥Price\n2. [Product Name]({$this->websiteUrl}/slug) - ¥Price\n\nAfter every product list, ALWAYS add:\nJust reply with the number to add to cart, say **add all** for everything, or I can add items for you!\n\nFor recipe ideas, end with:\n**[🛒 Add ALL Ingredients to Cart]({$this->websiteUrl}/cart/add_bulk?ids=[id1,id2...])**\n\nIMPORTANT: Never show stock quantity unless the user specifically asks.";
+
+        // Authoritative number → product_id map for the list the customer just saw.
+        // Prevents the model from re-searching and adding a different product when
+        // the customer replies with a number (e.g. "1").
+        $productListContext = $this->lastProductListContext($session);
+        if ($productListContext !== null) {
+            $parts[] = $productListContext;
+        }
 
         $parts[] = $this->conversationGuidance($ctx);
 
         return implode("\n\n", $parts);
+    }
+
+    /**
+     * Render the full 360° customer profile (orders, cart, addresses, store
+     * behaviour and long-term interests) as LLM context. Uses the same rich
+     * profile the admin dashboard sees. Kept compact + fully defensive.
+     */
+    private function buildProfileContext(ChatSession $session): ?string
+    {
+        try {
+            $profile = app(\Anwar\GunmaAgent\Services\CustomerProfileService::class)->forSession($session);
+        } catch (\Throwable $e) {
+            Log::debug('[Agent] Profile context failed', ['error' => $e->getMessage()]);
+            return null;
+        }
+
+        $lines = [];
+
+        // 1. Person (account details)
+        $c = $profile['customer'] ?? null;
+        if ($c) {
+            $lines[] = "- Account: #{$c['id']} — joined " . ($c['joined_at'] ? substr((string) $c['joined_at'], 0, 10) : 'unknown');
+            if (! empty($c['name']))    $lines[] = "- Full name: {$c['name']}";
+            if (! empty($c['email']))   $lines[] = "- Email: {$c['email']}";
+            if (! empty($c['phone']))   $lines[] = "- Phone: {$c['phone']}";
+            if (! empty($c['country'])) $lines[] = "- Country: {$c['country']}";
+            if (! empty($c['native_language'])) $lines[] = "- Native language: {$c['native_language']}";
+            if (! empty($c['type']))    $lines[] = "- Customer type: {$c['type']}";
+            if (! empty($c['status']))  $lines[] = "- Account status: {$c['status']}";
+            if ($c['points'] > 0)       $lines[] = "- Loyalty points: {$c['points']}";
+            if ($c['wallet'] > 0)       $lines[] = "- Wallet balance: ¥{$c['wallet']}";
+        } else {
+            $lines[] = "- Account: guest visitor (" . ($profile['session']['visitor_id'] ?? '') . ")";
+        }
+
+        // 2. Saved addresses (know where they live / deliver to)
+        $addresses = $profile['addresses'] ?? [];
+        if (! empty($addresses)) {
+            foreach (array_slice($addresses, 0, 3) as $a) {
+                $addr = array_filter([
+                    $a['name'] ?? null,
+                    $a['phone'] ?? null,
+                    $a['street'] ?? null,
+                    $a['apartment'] ?? null,
+                    $a['city'] ?? null,
+                    $a['state'] ?? null,
+                    $a['postal_code'] ?? null,
+                ]);
+                if ($addr) {
+                    $lines[] = "- Saved address" . (! empty($a['is_default']) ? ' (DEFAULT — use for checkout)' : '') . ': ' . implode(', ', $addr);
+                }
+            }
+        }
+
+        // 3. Recent orders
+        $orders = array_slice($profile['orders'] ?? [], 0, 5);
+        if (! empty($orders)) {
+            $lines[] = '- Recent orders:';
+            foreach ($orders as $o) {
+                $lines[] = "  * #{$o['id']} — {$o['status']} / payment {$o['payment_status']} — ¥" . number_format((float) $o['total_amount']) . ($o['delivery_date'] ? " — delivery {$o['delivery_date']}" : '') . ' — ' . substr((string) $o['created_at'], 0, 10);
+            }
+        }
+        $m = $profile['metrics'] ?? [];
+        if (($m['orders_count'] ?? 0) > 0) {
+            $lines[] = "- Total earned orders: {$m['orders_count']}, total spent ¥" . number_format((float) ($m['total_spent'] ?? 0), 2) . ", avg order ¥" . number_format((float) ($m['avg_order'] ?? 0), 2);
+        }
+
+        // 4. Cart contents (titles + totals)
+        $cart = $profile['cart'] ?? [];
+        if (! empty($cart)) {
+            $lines[] = '- Cart right now (' . count($cart) . ' items):';
+            foreach (array_slice($cart, 0, 8) as $ci) {
+                $lines[] = "  * {$ci['title']} ×{$ci['quantity']} — ¥" . number_format((float) $ci['line_total']);
+            }
+        }
+
+        // 5. Long-term interests (built day by day from their behaviour)
+        $i = $profile['interest'] ?? [];
+        if (! empty($i['top_products'])) {
+            $names = array_map(fn ($p) => $p['title'], array_slice($i['top_products'], 0, 8));
+            $lines[] = '- Most interested in (browsed/carted, highest first): ' . implode(', ', $names);
+        }
+        if (! empty($i['top_categories'])) {
+            $lines[] = '- Favorite categories: ' . implode(', ', array_slice($i['top_categories'], 0, 6));
+        }
+        if (! empty($i['top_search_keywords'])) {
+            $lines[] = '- Recent searches on our site: ' . implode(', ', array_slice($i['top_search_keywords'], 0, 8));
+        }
+        if (! empty($i['active_days']) || ! empty($i['session_count'])) {
+            $lines[] = "- Engagement: {$i['active_days']} active days, {$i['session_count']} sessions" . (! empty($i['last_activity_at']) ? ', last active ' . substr((string) $i['last_activity_at'], 0, 16) : '');
+        }
+
+        // 6. Store behaviour (recent searches / page views / product views)
+        $act = $profile['activity'] ?? [];
+        if (! empty($act['recent_searches'])) {
+            $lines[] = '- Last site searches: ' . implode(', ', array_slice($act['recent_searches'], 0, 6));
+        }
+        $lastProductView = null;
+        foreach (($act['recent'] ?? []) as $ra) {
+            if (($ra['action'] ?? '') === 'product_view' && ! empty($ra['product_id'])) {
+                $lastProductView = $ra;
+                break;
+            }
+        }
+        if ($lastProductView) {
+            $pid = $lastProductView['title'] ?? ('#' . $lastProductView['product_id']);
+            $when = substr((string) ($lastProductView['logged_at'] ?? ''), 0, 16);
+            $lines[] = "- Was just looking at product: {$pid} ({$when}) — a natural moment to offer that item or its ingredients.";
+        }
+
+        if (empty($lines)) {
+            return null;
+        }
+
+        array_unshift(
+            $lines,
+            '## CUSTOMER 360 PROFILE (use this to talk like you already know them — greet warmly, reference their orders/tastes naturally, build the relationship; NEVER dump this data as a list and NEVER quote sensitive fields unless needed)',
+        );
+
+        return implode("\n", $lines);
     }
 
     /**
@@ -392,13 +575,19 @@ Talk like a friendly shopkeeper at the next door dokan — warm, natural, casual
   (e.g. a complete Japanese sentence), you may mirror that language for that reply.
   A short English word like "hello" or "ok" is NOT a reason to switch to English.
 - Never reply in a language the customer cannot understand.
-- Tell a small "golpo kotha" (friendly chit-chat) while you work: e.g. "Aaj brishti, garam garam khichuri bhalo lage — chal ar dal ache, lagbe?"
+- Tell a small "golpo kotha" (friendly chit-chat) while you work, but keep it VARIED and relevant to what the customer actually asked — never repeat the same dish or sentence.
 - Ask ONE natural follow-up question at a time instead of dumping everything.
+
+## VARIETY & NO-REPETITION (VERY IMPORTANT)
+- **NEVER default to khichuri.** Do not suggest khichuri unless the customer explicitly asks for it or clearly wants a plain comfort meal. A rain/season hint is NOT a reason to push khichuri.
+- Never suggest the same dish twice in a row or across turns. Check the conversation and your previous suggestions, and move on to something different.
+- Match the dish to the customer's REQUEST: if they name a dish, cuisine, ingredient, or occasion, suggest exactly that category. If they are vague, offer a DIFFERENT option each time (e.g. biryani, karahi, roast, curry, kebab, pulao, noodles, dosa, dessert…).
+- Prefer the customer's own language/cuisine tastes and what is actually in stock. Do not overuse any single dish, ingredient, or phrase.
 
 ## MATCH THE WRITING STYLE (script vs Banglish) — VERY IMPORTANT
 Customers often type in **romanized South Asian languages** ("Banglish", "Hinglish",
 "Roman Urdu") instead of native script. Detect the style and match it:
-- If the customer writes in **Banglish** (e.g. "amar 2kg chal lagbe", "taka koto", "khichuri er upokoron dao",
+- If the customer writes in **Banglish** (e.g. "amar 2kg chal lagbe", "taka koto", "biryani er upokoron dao",
   "delivery kobe pabo", "ei ta add koro"), reply in natural **Banglish** — Roman letters, same friendly tone.
   Do NOT reply in Bengali script and do NOT switch to English. Example reply:
   "Bhalo choice! 2kg chal + 1L tel cart e add korchi — ar kichu lagbe naki?"
@@ -423,7 +612,16 @@ When the customer speaks naturally, YOU decide and call the right tools automati
 - "kichu jante chai / info" → search_support_kb, then answer conversationally.
 - "problem / complaint / payment issue" → create_support_ticket; missing/damaged → create_order_claim.
 - "recipe / ranna" → search_recipes then search_products_bulk for the ingredients ({{BULK_BUTTON}} list).
+- Cart-aware help: whenever a customer wants suggestions, "what should I cook?", or a complement, FIRST call `get_cart_contents` and build on what they already have (e.g. "chal ar dal ache — mangsho/masala add korle tehari hobe").
 Never ask "should I use a tool?" — just use it and reply naturally with the result.
+
+## RECIPES & COOKING PARTNER (read carefully)
+- The customer may ask for a recipe, cooking help, or "how to make X" at ANY time — just help them, warmly, in their language.
+- Step 1: call `search_recipes` with the dish/ingredient they asked for.
+- Step 2: if you get a real match, present it in 5-8 clear steps, then build the shopping list with `search_products_bulk` (use the `{{BULK_BUTTON}}` format).
+- Step 3 — FALLBACK (VERY IMPORTANT): if `search_recipes` returns nothing useful, or only a loosely related dish, DO NOT panic and DO NOT fall back to khichuri or any single default. Instead, COOK IT YOURSELF: compose a correct, authentic HALAL South Asian recipe for exactly what the customer asked (proper ingredients + numbered steps), keeping it halal (no pork, no alcohol, no non-halal ingredients). Then build the shopping list with `search_products_bulk`.
+- After giving a recipe, offer to add all the ingredients to the cart in one go (`bulk_add_to_cart`).
+- Only give a recipe when the customer actually asks for one (or asks "what can I cook?"). Do not force recipes into unrelated shopping conversations.
 
 ## STEP-BY-STEP ORDERING (story/narrative flow)
 Help the customer order through friendly conversation, step by step:
@@ -496,7 +694,7 @@ TXT;
                     $customer = $customerModel::find($session->customer_id);
                     if ($customer) {
                         $ctx['name'] = $ctx['name'] ?? $customer->name;
-                        $ctx['email'] = $ctx->email ?? $customer->email;
+                        $ctx['email'] = $ctx['email'] ?? $customer->email;
                         $ctx['points'] = (int) ($customer->available_point ?? 0);
                         $ctx['country'] = $customer->country ?? null;
 
@@ -584,10 +782,9 @@ TXT;
             return $greeting;
         }
 
-        // 2. Semantic cache — skipped for action requests (checkout/login/cart)
-        //    so the corresponding tool always fires instead of a cached reply.
-        $isAction = $this->isActionIntent($userMessage);
-        if (! $isAction) {
+        // 2. Semantic cache — only for generic, non-personal guest questions so
+        //    one customer's data is never served to another.
+        if ($this->shouldUseSemanticCache($session, $userMessage)) {
             $cachedResponse = $this->qdrantService->getSemanticCache($userMessage);
             if ($cachedResponse !== null) {
                 Log::info('[Agent] Semantic cache hit');
@@ -613,7 +810,7 @@ TXT;
 
         // 4. Memory retrieval: find similar past Q&A to improve this response
         try {
-            $similarMemories = $this->qdrantService->searchMemories($userMessage);
+            $similarMemories = $this->qdrantService->searchMemories($userMessage, 3, $session->customer_id ? (int) $session->customer_id : null);
             if (!empty($similarMemories)) {
                 Log::info('[Agent] Found ' . count($similarMemories) . ' similar past conversations');
                 // Memories are injected into context by buildContextWindow below
@@ -654,10 +851,9 @@ TXT;
             return;
         }
 
-        // 2. Semantic cache — skipped for action requests (checkout/login/cart)
-        //    so the corresponding tool always fires instead of a cached reply.
-        $isAction = $this->isActionIntent($userMessage);
-        if (! $isAction) {
+        // 2. Semantic cache — only for generic, non-personal guest questions so
+        //    one customer's data is never served to another.
+        if ($this->shouldUseSemanticCache($session, $userMessage)) {
             $cachedResponse = $this->qdrantService->getSemanticCache($userMessage);
             if ($cachedResponse !== null) {
                 $msg = $this->persistMessages($session, $userMessage, $cachedResponse, 'semantic_cache');
@@ -699,7 +895,6 @@ TXT;
         $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
         $usedModel = null;
         $usedActionTool = false;
-        $isAction = $this->isActionIntent($userMessage);
 
         // Use the vision model when the message carries an image.
         $primary = !empty($imageUrls) ? ($this->vision() ?? $this->llm()) : $this->llm();
@@ -759,10 +954,10 @@ TXT;
         }
 
         $this->persistMessages($session, $userMessage, $finalContent, $usedModel ?? ($primary['model']), $totalTokens);
-        $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
+        $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent, $session->customer_id ? (int) $session->customer_id : null);
         $this->storeConversationSummary($session, $userMessage, $finalContent);
         // Never cache replies that triggered a UI action tool (they must re-run).
-        if (! $usedActionTool && ! $isAction && $finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
+        if (! $usedActionTool && $finalContent !== "I'm sorry, I encountered an error. How else can I help you?" && $this->shouldUseSemanticCache($session, $userMessage)) {
             $this->qdrantService->setSemanticCache($userMessage, $finalContent);
         }
 
@@ -784,7 +979,6 @@ TXT;
         $maxIterations = (int) config('gunma-agent.max_tool_iterations', 5);
         $usedModel = null;
         $usedActionTool = false;
-        $isAction = $this->isActionIntent($userMessage);
 
         $primary = !empty($imageUrls) ? ($this->vision() ?? $this->llm()) : $this->llm();
         $fallback = $this->fallback();
@@ -856,10 +1050,10 @@ TXT;
         $savedMessage = $this->persistMessages($session, $userMessage, $finalContent, $usedModel ?? $primary['model'], $totalTokens);
         yield $this->sseEvent('message', ['id' => $savedMessage->id, 'content' => $finalContent]);
 
-        $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent);
+        $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent, $session->customer_id ? (int) $session->customer_id : null);
         $this->storeConversationSummary($session, $userMessage, $finalContent);
         // Never cache replies that triggered a UI action tool (they must re-run).
-        if (! $usedActionTool && ! $isAction && $finalContent !== "I'm sorry, I encountered an error. How else can I help you?") {
+        if (! $usedActionTool && $finalContent !== "I'm sorry, I encountered an error. How else can I help you?" && $this->shouldUseSemanticCache($session, $userMessage)) {
             $this->qdrantService->setSemanticCache($userMessage, $finalContent);
         }
 
@@ -871,8 +1065,9 @@ TXT;
     private function injectMemoryContext(ChatSession $session, string $userMessage, array &$messages): void
     {
         try {
-            // Search conversation memories
-            $memories = $this->qdrantService->searchMemories($userMessage, 3);
+            // Search conversation memories (only this customer's own — never
+            // guests or other visitors, to prevent cross-user leakage).
+            $memories = $this->qdrantService->searchMemories($userMessage, 3, $session->customer_id ? (int) $session->customer_id : null);
             if (!empty($memories)) {
                 $lines = ["\n## SIMILAR PAST CONVERSATIONS (for reference)"];
                 foreach ($memories as $m) {
@@ -1131,8 +1326,133 @@ TXT;
 
         event(new \Anwar\GunmaAgent\Events\MessageBroadcasted($message));
         $this->cacheMessageInRedis($session->id, 'assistant', $assistantMessage);
+        $this->captureProductList($session, $assistantMessage);
 
         return $message;
+    }
+
+    /**
+     * Parse the numbered product list (clickable links) from an assistant reply
+     * and remember it on the session so a later "1"/"2" reply maps to the exact
+     * product the customer was shown, instead of triggering a fresh search.
+     */
+    private function captureProductList(ChatSession $session, string $assistantMessage): void
+    {
+        if ($assistantMessage === '') {
+            return;
+        }
+
+        // Matches BOTH list formats the agent produces:
+        //  1. [Name](https://site/slug) - ¥Price                     (product list)
+        //  2. [Name](slug) - ¥Price - product_id:123                 (recipe shopping list)
+        if (!preg_match_all(
+            '/^\s*(\d{1,2})[.)]\s*\[([^\]]+)\]\((https?:\/\/[^\s)]+|[^\s)]+)\)\s*(?:[-–—:]*\s*¥?\s*([0-9][0-9,]*))?\s*(?:[-–—]?\s*product_id\s*:\s*(\d+))?/mui',
+            $assistantMessage,
+            $matches,
+            PREG_SET_ORDER
+        )) {
+            return;
+        }
+
+        $items = [];
+        $seen = [];
+        foreach ($matches as $m) {
+            $index = (int) $m[1];
+            if (isset($seen[$index]) || $index < 1 || $index > 50) {
+                continue;
+            }
+            $seen[$index] = true;
+
+            $url = $m[3];
+            $path = (string) parse_url((str_starts_with($url, 'http') ? $url : 'https://x/' . ltrim($url, '/')), PHP_URL_PATH);
+            $slug = trim(basename($path) ?: $url);
+
+            $items[$index] = [
+                'index'      => $index,
+                'title'      => trim($m[2]),
+                'slug'       => $slug,
+                'url'        => $url,
+                'price'      => isset($m[4]) && $m[4] !== '' ? (float) str_replace(',', '', $m[4]) : null,
+                'product_id' => (! empty($m[5])) ? (int) $m[5] : null,
+            ];
+        }
+
+        if (empty($items)) {
+            return;
+        }
+
+        ksort($items);
+
+        // Resolve any missing product IDs from slugs so the model can call
+        // add_item_to_cart directly.
+        $slugs = array_values(array_filter(array_map(
+            fn($i) => empty($i['product_id']) ? $i['slug'] : '', $items
+        )));
+        if (!empty($slugs)) {
+            try {
+                $productModel = config('gunma-agent.models.product', \App\Models\Product::class);
+                if ($productModel && class_exists($productModel)) {
+                    $map = $productModel::whereIn('slug', $slugs)->pluck('id', 'slug')->all();
+                    foreach ($items as $index => $item) {
+                        if (empty($item['product_id']) && isset($map[$item['slug']])) {
+                            $items[$index]['product_id'] = (int) $map[$item['slug']];
+                        }
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::warning('[Agent] Product list id resolution failed', ['error' => $e->getMessage()]);
+            }
+        }
+
+        // Keep only entries that map to a real product — avoids treating unrelated
+        // numbered link lists (recipes, articles, etc.) as a cart menu.
+        $items = array_values(array_filter($items, fn($i) => !empty($i['product_id'])));
+        if (empty($items)) {
+            return;
+        }
+
+        $metadata = $session->metadata ?? [];
+        $metadata['last_product_list'] = [
+            'items' => array_slice($items, 0, 20),
+            'at'    => now()->toIso8601String(),
+        ];
+        $session->update(['metadata' => $metadata]);
+    }
+
+    /**
+     * Render the last product list shown to the customer as an authoritative
+     * number → product_id map used on the next turn.
+     */
+    private function lastProductListContext(ChatSession $session): ?string
+    {
+        $list = $session->metadata['last_product_list'] ?? null;
+        if (empty($list['items']) || !is_array($list['items'])) {
+            return null;
+        }
+
+        $lines = [
+            '## MOST RECENT PRODUCT LIST SHOWN TO CUSTOMER (authoritative — use these exact IDs)',
+            'The list below is exactly what the customer is looking at right now. If they reply with a number (e.g. "1", "2 add koro"), immediately call add_item_to_cart with the matching product_id. Do NOT run a new product search, do NOT re-order or substitute, and do NOT guess.',
+            'If they say "add all"/"shob", call bulk_add_to_cart with every product_id below.',
+        ];
+
+        foreach ($list['items'] as $item) {
+            if (!is_array($item) || empty($item['product_id'])) {
+                continue;
+            }
+            $title = $item['title'] ?? '';
+            $price = isset($item['price']) && $item['price'] !== null
+                ? ' — ¥' . number_format((float) $item['price'])
+                : '';
+            $slug = $item['slug'] ?? '';
+            $lines[] = "{$item['index']}. {$title}{$price} — product_id {$item['product_id']} — /{$slug}";
+        }
+
+        if (count($lines) <= 3) {
+            return null;
+        }
+
+        return implode("\n", $lines);
     }
 
     private function cacheMessageInRedis(string $sessionId, string $role, string $content): void

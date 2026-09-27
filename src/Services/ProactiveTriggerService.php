@@ -27,8 +27,8 @@ class ProactiveTriggerService
             'lemon', 'cucumber', 'yogurt', 'green mango',
         ],
         'rainy' => [
-            'khichuri mix', 'tehari masala', 'tea', 'pakora mix', 'piyaju mix',
-            'mustard oil', 'jhalmuri mix', 'chanachur',
+            'tea', 'pakora mix', 'piyaju mix', 'khichuri mix', 'tehari masala',
+            'mustard oil', 'jhalmuri mix', 'chanachur', 'soup mix', 'instant noodles',
         ],
     ];
 

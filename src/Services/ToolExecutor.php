@@ -267,9 +267,29 @@ class ToolExecutor
 
         $customer = auth('customer')->user();
 
-        if ($customer && $cartModel) {
+        // Guest checkout support: mirror the storefront's guest cart identity
+        // (encrypted `guest_id` cookie → cookie_id) so AI cart adds really work
+        // for guests — previously this silently did nothing for them.
+        $identity = null;
+        if ($customer) {
+            $identity = ['customer_id' => $customer->id];
+        } elseif ($cartModel) {
+            $cookieId = $this->resolveGuestCookieId();
+            if (! $cookieId) {
+                return [
+                    'status' => 'error',
+                    'message' => 'Please log in to add items to your cart.',
+                ];
+            }
+            $identity = ['cookie_id' => $cookieId];
+        } else {
+            $identity = null;
+        }
+
+        if ($identity && $cartModel) {
             $existing = $cartModel::where('product_id', $productId)
-                ->where('customer_id', $customer->id)
+                ->where('product_option_id', '')
+                ->where($identity)
                 ->first();
 
             if ($existing) {
@@ -280,22 +300,23 @@ class ToolExecutor
                 $existing->update(['quantity' => $newQty]);
             } else {
                 $price = (float) ($stock?->online_price ?? 0);
+                $discount = (float) ($product->discount->amount ?? 0);
                 $taxPercent = (float) ($product->tax_percent ?? 8);
-                $totalTax = $price * $quantity * ($taxPercent / 100);
+                $lineAmount = ($price - $discount) * $quantity;
+                $totalTax = $lineAmount * ($taxPercent / 100);
 
-                $cartModel::create([
+                $cartModel::create(array_merge($identity, [
                     'product_id' => $productId,
                     'product_option_id' => '',
-                    'customer_id' => $customer->id,
                     'quantity' => $quantity,
                     'weight' => (float) ($product->weight ?? 0),
                     'unit' => $product->unit ?? $stock?->unit,
                     'item_price' => $price,
                     'tax_percent' => $taxPercent,
                     'total_tax_amount' => $totalTax,
-                    'total_discount_amount' => 0,
-                    'total_amount' => $price * $quantity,
-                ]);
+                    'total_discount_amount' => $discount * $quantity,
+                    'total_amount' => $lineAmount,
+                ]));
             }
         }
 
@@ -317,6 +338,18 @@ class ToolExecutor
         $cartModel = $this->getModelClass('cart', \App\Models\Cart::class);
         if (!$productModel) return ['error' => 'Product system unavailable.'];
 
+        // Guest support (same policy as add_item_to_cart).
+        $identity = null;
+        if ($customer) {
+            $identity = ['customer_id' => $customer->id];
+        } elseif ($cartModel) {
+            $cookieId = $this->resolveGuestCookieId();
+            if (! $cookieId) {
+                return ['error' => 'Please log in to add items to your cart.'];
+            }
+            $identity = ['cookie_id' => $cookieId];
+        }
+
         $added = [];
         $skipped = [];
         $errors = [];
@@ -336,8 +369,11 @@ class ToolExecutor
                     continue;
                 }
 
-                if ($customer && $cartModel) {
-                    $existing = $cartModel::where('product_id', $pid)->where('customer_id', $customer->id)->first();
+                if ($identity && $cartModel) {
+                    $existing = $cartModel::where('product_id', $pid)
+                        ->where('product_option_id', '')
+                        ->where($identity)
+                        ->first();
                     if ($existing) {
                         if ($existing->quantity < $available) {
                             $existing->increment('quantity');
@@ -347,21 +383,22 @@ class ToolExecutor
                         }
                     } else {
                         $price = (float) ($stock?->online_price ?? 0);
+                        $discount = (float) ($product->discount->amount ?? 0);
                         $taxPercent = (float) ($product->tax_percent ?? 8);
-                        $totalTax = $price * ($taxPercent / 100);
-                        $cartModel::create([
+                        $lineAmount = max(0, $price - $discount);
+                        $totalTax = $lineAmount * ($taxPercent / 100);
+                        $cartModel::create(array_merge($identity, [
                             'product_id' => $pid,
                             'product_option_id' => '',
-                            'customer_id' => $customer->id,
                             'quantity' => 1,
                             'weight' => (float) ($product->weight ?? 0),
                             'unit' => $product->unit ?? $stock?->unit,
                             'item_price' => $price,
                             'tax_percent' => $taxPercent,
                             'total_tax_amount' => $totalTax,
-                            'total_discount_amount' => 0,
-                            'total_amount' => $price,
-                        ]);
+                            'total_discount_amount' => $discount,
+                            'total_amount' => $lineAmount,
+                        ]));
                         $added[] = $product->title;
                     }
                 } else {
@@ -385,6 +422,29 @@ class ToolExecutor
             'action' => 'open_checkout',
             'cart_url' => config('gunma-agent.website_url') . '/checkout',
         ];
+    }
+
+    /**
+     * Resolve the guest cart identity exactly like the storefront
+     * (CartAPIController): encrypted `guest_id` cookie → cookie_id.
+     * Returns null when there is no guest session.
+     */
+    private function resolveGuestCookieId(): ?string
+    {
+        if (! app()->bound('request')) {
+            return null;
+        }
+
+        $cookie = \Illuminate\Support\Facades\Request::cookie('guest_id');
+        if (! $cookie) {
+            return null;
+        }
+
+        try {
+            return \Illuminate\Support\Facades\Crypt::decrypt($cookie);
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     private function getFeaturedRecipe(): array
@@ -418,9 +478,9 @@ class ToolExecutor
                 'instructions' => 'Fry whole spices in oil. Add onion paste and cook until golden. Add beef and spices, cook 20min. Add potatoes, cook until tender.',
             ],
             [
-                'title' => 'Chicken Khichuri',
-                'ingredients' => ['chicken', 'rice', 'moong dal', 'onion', 'garlic', 'ginger', 'turmeric', 'ghee', 'cumin', 'cinnamon', 'cardamom', 'potato'],
-                'instructions' => 'Fry whole spices and onion in ghee. Add chicken, cook 10min. Add rice, dal, water. Cook until soft. Perfect for rainy days!',
+                'title' => 'Chicken Roast',
+                'ingredients' => ['chicken', 'yogurt', 'onion', 'garlic', 'ginger', 'chili powder', 'turmeric', 'cumin', 'ghee', 'saffron', 'fried onion', 'salt'],
+                'instructions' => 'Marinate chicken in yogurt and spices. Sear in ghee, add marinade and a little water, cover and cook until tender. Uncover and reduce the gravy until thick and glossy. Serve with polao.',
             ],
             [
                 'title' => 'Beef Chaap (Eid Special)',
@@ -657,14 +717,23 @@ class ToolExecutor
     private function getCartContents(): array
     {
         $customer = auth('customer')->user();
-        if (!$customer) return ['error' => 'Please log in to view your cart.'];
 
         $cartModel = $this->getModelClass('cart', \App\Models\Cart::class);
         if (!$cartModel) return ['error' => 'Cart system unavailable.'];
 
-        $items = $cartModel::where('customer_id', $customer->id)
-            ->with('product')
-            ->get();
+        // Guests read their own cart via the storefront-style guest cookie.
+        $query = $cartModel::with('product');
+        if ($customer) {
+            $query->where('customer_id', $customer->id);
+        } else {
+            $cookieId = $this->resolveGuestCookieId();
+            if (! $cookieId) {
+                return ['error' => 'Your cart is empty. Add something you like!'];
+            }
+            $query->where('cookie_id', $cookieId);
+        }
+
+        $items = $query->get();
 
         $subtotal = 0.0;
         $tax = 0.0;

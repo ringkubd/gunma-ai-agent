@@ -56,6 +56,7 @@ class CustomerProfileService
         }
 
         $profile['activity'] = $this->activity($customerId, $visitorId);
+        $profile['interest'] = $this->interest($customerId, $visitorId, (string) $session->id);
         $profile['metrics']  = $this->metrics($profile, $session);
         $profile['recent_messages'] = $this->recentMessages($session);
 
@@ -231,6 +232,100 @@ class CustomerProfileService
             ];
         } catch (\Throwable $e) {
             Log::debug('[Profile] activity failed', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
+
+    /**
+     * Long-term, behaviour-derived interest profile — built up day by day by the
+     * host's activity pipelines. Resolved by customer, then visitor, then session
+     * so the agent always knows what this person actually likes.
+     */
+    private function interest(?int $customerId, string $visitorId, string $sessionId): array
+    {
+        try {
+            if (! DB::getSchemaBuilder()->hasTable('customer_interest_profiles')) {
+                return [];
+            }
+
+            $keys = [];
+            if ($customerId) $keys[] = 'customer:' . $customerId;
+            if ($visitorId !== '') $keys[] = 'visitor:' . $visitorId;
+            if ($sessionId !== '') $keys[] = 'session:' . $sessionId;
+            if (empty($keys)) {
+                return [];
+            }
+
+            $rows = DB::table('customer_interest_profiles')
+                ->whereIn('profile_key', $keys)
+                ->get()
+                ->keyBy('profile_key');
+
+            $row = null;
+            foreach ($keys as $k) {
+                if (isset($rows[$k])) { $row = $rows[$k]; break; }
+            }
+            if (! $row) {
+                return [];
+            }
+
+            $decode = function ($v): array {
+                if (is_array($v)) return $v;
+                $d = json_decode((string) $v, true);
+                return is_array($d) ? $d : [];
+            };
+
+            $products   = $decode($row->top_products ?? null);
+            $categories = $decode($row->top_category_affinity ?? null);
+            $keywords   = $decode($row->top_search_keywords ?? null);
+
+            $topProducts = [];
+            if (! empty($products)) {
+                arsort($products);
+                $slice = array_slice($products, 0, 10, true);
+                $titles = [];
+                try {
+                    $titles = DB::table('products')->whereIn('id', array_map('intval', array_keys($slice)))->pluck('title', 'id')->all();
+                } catch (\Throwable $e) {}
+                foreach ($slice as $pid => $w) {
+                    $topProducts[] = ['id' => (int) $pid, 'title' => $titles[$pid] ?? ('Product #' . $pid), 'weight' => (int) $w];
+                }
+            }
+
+            $topCategories = [];
+            if (! empty($categories)) {
+                arsort($categories);
+                $slice = array_slice($categories, 0, 10, true);
+                $titles = [];
+                try {
+                    $titles = DB::table('categories')->whereIn('id', array_map('intval', array_keys($slice)))->pluck('title', 'id')->all();
+                } catch (\Throwable $e) {}
+                foreach (array_keys($slice) as $cid) {
+                    if (! empty($titles[$cid])) $topCategories[] = $titles[$cid];
+                }
+            }
+
+            $topKeywords = [];
+            if (! empty($keywords)) {
+                arsort($keywords);
+                $topKeywords = array_values(array_filter(array_keys(array_slice($keywords, 0, 12, true)), fn ($k) => $k !== ''));
+            }
+
+            return [
+                'top_products'        => $topProducts,
+                'top_categories'      => $topCategories,
+                'top_search_keywords' => $topKeywords,
+                'last_action_type'    => $row->last_action_type ?? null,
+                'last_product_id'     => isset($row->last_product_id) ? (int) $row->last_product_id : null,
+                'last_activity_at'    => isset($row->last_activity_at) ? (string) $row->last_activity_at : null,
+                'active_days'         => (int) ($row->active_days ?? 0),
+                'session_count'       => (int) ($row->session_count ?? 0),
+                'avg_dwell_seconds'   => (int) ($row->avg_dwell_seconds ?? 0),
+                'peak_hour'           => isset($row->peak_hour) ? (int) $row->peak_hour : null,
+                'prefecture'          => $row->prefecture ?? null,
+            ];
+        } catch (\Throwable $e) {
+            Log::debug('[Profile] interest failed', ['error' => $e->getMessage()]);
             return [];
         }
     }

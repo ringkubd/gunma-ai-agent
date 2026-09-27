@@ -38,6 +38,7 @@ Route::prefix($prefix)
         Route::get('/sessions/{id}/messages', [ChatController::class, 'getMessages']);
         Route::put('/sessions/{id}/profile', [ChatController::class, 'updateGuestProfile']);
         Route::post('/sessions/{id}/page-context', [ChatController::class, 'pageContext']);
+        Route::get('/agent-features', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'publicFeatures']);
         Route::post('/cart/bulk', [ChatController::class, 'bulkAddToCart']);
     });
 
@@ -82,6 +83,8 @@ Route::prefix(config('gunma-agent.admin_route_prefix', 'api/admin/chat'))
         Route::put('/settings/llm', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'update']);
         Route::get('/models', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'models']);
         Route::post('/settings/test', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'test']);
+        Route::get('/settings/doodle', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'doodle']);
+        Route::put('/settings/doodle', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'updateDoodle']);
         Route::post('/reindex', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'reindex']);
     });
 

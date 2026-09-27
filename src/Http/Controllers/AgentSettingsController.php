@@ -177,4 +177,51 @@ class AgentSettingsController extends Controller
         }
         return substr($value, 0, 4) . str_repeat('•', 8) . substr($value, -4);
     }
+
+    /* ── Piku Doodle (floating companion) controls ─────────────── */
+
+    /**
+     * PUBLIC: the storefront widget probes this to decide whether the doodle
+     * may render. Kept tiny + cache-friendly.
+     * GET /api/chat/agent-features
+     */
+    public function publicFeatures(): JsonResponse
+    {
+        return response()->json([
+            'doodle' => [
+                'enabled' => $this->settings->bool('doodle_enabled', true),
+            ],
+        ])->header('Cache-Control', 'no-cache');
+    }
+
+    /**
+     * Admin read.
+     * GET /api/admin/chat/settings/doodle
+     */
+    public function doodle(): JsonResponse
+    {
+        return response()->json([
+            'data' => [
+                'doodle_enabled' => $this->settings->bool('doodle_enabled', true),
+            ],
+        ]);
+    }
+
+    /**
+     * Admin write.
+     * PUT /api/admin/chat/settings/doodle { enabled: bool }
+     */
+    public function updateDoodle(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'enabled' => 'required|boolean',
+        ]);
+
+        $this->settings->set('doodle_enabled', $validated['enabled'] ? '1' : '0');
+        $this->settings->flush();
+
+        return response()->json([
+            'data' => ['doodle_enabled' => $validated['enabled']],
+        ]);
+    }
 }

@@ -212,6 +212,21 @@ class CustomerProfileService
                     return $row;
                 })->toArray();
 
+            // Slug fallback: pages sometimes only carry /products/<slug>.
+            foreach ($recent as $idx => $r) {
+                if (empty($r['product_id']) && ! empty($r['page_url'])
+                    && preg_match('#/products?/([a-z0-9\-]+)#i', (string) $r['page_url'], $mout)) {
+                    $slug = $mout[1];
+                    try {
+                        $row = DB::table('products')->where('slug', $slug)->first(['id', 'title']);
+                        if ($row) {
+                            $recent[$idx]['product_id'] = (int) $row->id;
+                            $recent[$idx]['title'] = $row->title;
+                        }
+                    } catch (\Throwable $e) {}
+                }
+            }
+
             // Resolve once for all product_view rows (dashboard + Piku context).
             if (! empty($titles)) {
                 try {
@@ -221,7 +236,7 @@ class CustomerProfileService
                     }
                 } catch (\Throwable $e) {}
                 foreach ($recent as &$r) {
-                    if (! empty($r['product_id']) && isset($titles[$r['product_id']])) {
+                    if (! empty($r['product_id']) && empty($r['title']) && isset($titles[$r['product_id']])) {
                         $r['title'] = $titles[$r['product_id']];
                     }
                 }

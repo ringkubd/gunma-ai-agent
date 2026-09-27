@@ -409,11 +409,25 @@ class ChatController extends Controller
      */
     public function getSession(string $sessionId): JsonResponse
     {
-        $session = ChatSession::with(['messages' => fn($q) => $q->oldest()->take(100)])
-            ->findOrFail($sessionId);
+        // Latest 100 messages, shown oldest→newest. With `oldest()->take(100)`
+        // the dashboard kept showing the FIRST 100 forever — as the customer
+        // kept testing, every NEW message pushed the older ones out of the
+        // window, so recent messages looked like they "never persisted".
+        $session = ChatSession::findOrFail($sessionId);
+
+        // Plain query: a hasMany relation already orders by created_at ASC,
+        // and an extra orderByDesc can't override it in MySQL reliably.
+        $messages = ChatMessage::where('session_id', $session->id)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->limit(100)
+            ->get()
+            ->sortBy('created_at')
+            ->values();
 
         return response()->json([
             'session' => $session,
+            'messages' => $messages,
             'customer_name' => $session->resolved_name,
         ]);
     }

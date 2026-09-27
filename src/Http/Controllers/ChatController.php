@@ -425,6 +425,10 @@ class ChatController extends Controller
             ->sortBy('created_at')
             ->values();
 
+        // The dashboard reads session.messages again — attach the newest
+        // window onto the model so the response payload is unchanged.
+        $session->setRelation('messages', $messages);
+
         return response()->json([
             'session' => $session,
             'messages' => $messages,

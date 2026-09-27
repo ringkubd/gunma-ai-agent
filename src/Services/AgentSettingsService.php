@@ -37,6 +37,8 @@ class AgentSettingsService
         'embedding_api_key',
         'embedding_model',
         'embedding_dims',
+        // Storefront feature flags
+        'doodle_enabled',
     ];
 
     /** @var array<string,string|null>|null */

@@ -36,6 +36,9 @@ class ToolExecutor
             'get_customer_info'              => $this->getCustomerInfo(),
             'add_item_to_cart'               => $this->addItemToCart($args),
             'bulk_add_to_cart'               => $this->bulkAddToCart($args),
+            'remove_item_from_cart'          => $this->removeItemFromCart($args),
+            'update_cart_quantity'           => $this->updateCartQuantity($args),
+            'clear_cart'                     => $this->clearCart(),
             'get_featured_recipe'            => $this->getFeaturedRecipe(),
             'create_support_ticket'          => $this->createSupportTicket($args),
             'check_delivery_time'            => $this->checkDeliveryTime($args),
@@ -103,7 +106,14 @@ class ToolExecutor
         }
 
         $order = $query->first();
-        if (!$order) return ['error' => 'Order not found.'];
+        if (!$order) {
+            // Private data: the order may belong to another customer. Explain
+            // the scope instead of "not in our system" so users don't think
+            // the order vanished from the store.
+            return ['error' =>
+                'আমি শুধুমাত্র আপনার নিজের অ্যাকাউন্টের order দেখতে পারি। এই order টা আপনার অ্যাকাউন্টে পাওয়া যায়নি '
+                . '— order ID বা tracking number আবার চেক করে দিন, অথবা যে email-এ order করেছেন সেটা বলুন।'];
+        }
 
         $timeline = [];
         if (method_exists($order, 'trackingHistories') && $order->trackingHistories) {
@@ -426,11 +436,23 @@ class ToolExecutor
 
     /**
      * Resolve the guest cart identity exactly like the storefront
-     * (CartAPIController): encrypted `guest_id` cookie → cookie_id.
-     * Returns null when there is no guest session.
+     * (encrypted `guest_id` cookie → cookie_id). Prefers the pre-bootstrapped
+     * GuestCartService (ChatController bootstraps it per request), falls back
+     * to decrypting the cookie directly. Returns null when unavailable.
      */
     private function resolveGuestCookieId(): ?string
     {
+        try {
+            if (app()->bound(\Anwar\GunmaAgent\Services\GuestCartService::class)) {
+                $svc = app(\Anwar\GunmaAgent\Services\GuestCartService::class);
+                if ($svc->cookieId()) {
+                    return $svc->cookieId();
+                }
+            }
+        } catch (\Throwable) {
+            // fall through to cookie decryption
+        }
+
         if (! app()->bound('request')) {
             return null;
         }
@@ -445,6 +467,23 @@ class ToolExecutor
         } catch (\Throwable $e) {
             return null;
         }
+    }
+
+    /**
+     * Shared cart identity for all cart tools: logged-in customer, else guest
+     * cookie id. Returns null -> not identifiable (guest without cart session).
+     */
+    private function cartIdentity(object $cartModel): ?array
+    {
+        $customer = auth('customer')->user();
+        if ($customer) {
+            return ['customer_id' => $customer->id];
+        }
+        $cookieId = $this->resolveGuestCookieId();
+        if (! $cookieId) {
+            return null;
+        }
+        return ['cookie_id' => $cookieId];
     }
 
     private function getFeaturedRecipe(): array
@@ -765,6 +804,99 @@ class ToolExecutor
             'tax'         => round($tax, 2),
             'total_with_tax' => $totalWithTax,
             'note'        => 'Prices exclude shipping. Checkout adds shipping (¥0 for orders ¥10,000+ outside Okinawa, otherwise ¥1,200). Quote total_with_tax (plus shipping) as the payable amount.',
+        ];
+    }
+
+    /* ── Cart management tools (works for customers AND guests) ── */
+
+    private function removeItemFromCart(array $args): array
+    {
+        $productId = $args['product_id'] ?? null;
+        if (!$productId) return ['error' => 'Please specify a product ID.'];
+
+        $cartModel = $this->getModelClass('cart', \App\Models\Cart::class);
+        if (!$cartModel) return ['error' => 'Cart system unavailable.'];
+
+        $identity = $this->cartIdentity($cartModel);
+        if (!$identity) return ['error' => 'Your cart is empty.'];
+
+        $item = $cartModel::where('product_id', $productId)
+            ->where('product_option_id', '')
+            ->where($identity)
+            ->first();
+
+        if (!$item) return ['error' => 'That item is not in your cart.'];
+
+        $title = $item->product->title ?? ("#" . $productId);
+        $item->delete();
+
+        return ['status' => 'success', 'message' => "Removed {$title} from your cart."];
+    }
+
+    private function updateCartQuantity(array $args): array
+    {
+        $productId = $args['product_id'] ?? null;
+        $quantity = (int) ($args['quantity'] ?? -1);
+        if (!$productId || $quantity < 0 || $quantity > 99) {
+            return ['error' => 'Please specify a product ID and a quantity between 0 and 99.'];
+        }
+
+        $cartModel = $this->getModelClass('cart', \App\Models\Cart::class);
+        if (!$cartModel) return ['error' => 'Cart system unavailable.'];
+
+        $identity = $this->cartIdentity($cartModel);
+        if (!$identity) return ['error' => 'Your cart is empty.'];
+
+        $item = $cartModel::where('product_id', $productId)
+            ->where('product_option_id', '')
+            ->where($identity)
+            ->first();
+
+        if (!$item) return ['error' => 'That item is not in your cart.'];
+
+        if ($quantity === 0) {
+            $title = $item->product->title ?? ("#" . $productId);
+            $item->delete();
+            return ['status' => 'success', 'message' => "Removed {$title} from your cart."];
+        }
+
+        $stock = $item->product->latestStock ?? null;
+        $availableQty = $stock ? (int) $stock->available_quantity : 0;
+        if ($availableQty && $quantity > $availableQty) {
+            return ['status' => 'error', 'message' => "Only {$availableQty} available for that item."];
+        }
+
+        $item->update([
+            'quantity' => $quantity,
+            'total_amount' => $item->total_amount > 0 && $item->quantity > 0
+                ? round(($item->total_amount / $item->quantity) * $quantity, 2)
+                : $item->total_amount,
+            'total_tax_amount' => $item->total_tax_amount > 0 && $item->quantity > 0
+                ? round(($item->total_tax_amount / $item->quantity) * $quantity, 2)
+                : $item->total_tax_amount,
+        ]);
+
+        $title = $item->product->title ?? ("#" . $productId);
+        return ['status' => 'success', 'message' => "Updated {$title} to {$quantity}."];
+    }
+
+    private function clearCart(): array
+    {
+        $cartModel = $this->getModelClass('cart', \App\Models\Cart::class);
+        if (!$cartModel) return ['error' => 'Cart system unavailable.'];
+
+        $identity = $this->cartIdentity($cartModel);
+        if (!$identity) return ['error' => 'Your cart is already empty.'];
+
+        $deleted = $cartModel::where('product_option_id', '')
+            ->where($identity)
+            ->delete();
+
+        return [
+            'status' => 'success',
+            'message' => $deleted
+                ? "Cleared {$deleted} items from your cart."
+                : 'Your cart is already empty.',
         ];
     }
 
@@ -1316,6 +1448,43 @@ class ToolExecutor
                 'function' => [
                     'name' => 'get_cart_contents',
                     'description' => 'Get items currently in the user cart. Use before suggesting products.',
+                    'parameters' => ['type' => 'object', 'properties' => (object)[]],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'remove_item_from_cart',
+                    'description' => 'Remove one item from the user cart when they say "add ta remove/delete koro", "bad diye dao", "remove item".',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'product_id' => ['type' => 'integer', 'description' => 'Product ID to remove.'],
+                        ],
+                        'required' => ['product_id'],
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'update_cart_quantity',
+                    'description' => 'Change the quantity of an item in the cart ("2kg koro", "1 ta kore dio"). Quantity 0 removes the item.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'product_id' => ['type' => 'integer'],
+                            'quantity' => ['type' => 'integer', 'description' => 'New quantity (0 = remove).'],
+                        ],
+                        'required' => ['product_id', 'quantity'],
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'clear_cart',
+                    'description' => 'Empty the user cart entirely when they say "cart khali koro", "clear cart", "sob remove koro".',
                     'parameters' => ['type' => 'object', 'properties' => (object)[]],
                 ],
             ],

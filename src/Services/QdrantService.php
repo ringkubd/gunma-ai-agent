@@ -131,19 +131,59 @@ class QdrantService
             $productModel = config('gunma-agent.models.product', \App\Models\Product::class);
             if (!class_exists($productModel)) return [];
 
-            $products = $productModel::where('status', 'Active')
+            // Exact title/slug first (users often paste the exact product name,
+            // sometimes with sizes like "3.5kg (±100g)" that break plain LIKE).
+            $clean = trim(str_replace(['+', '||'], ' ', preg_replace('/\([^)]*\)/', '', $query)));
+            $hits = $productModel::where('status', 'Active')
                 ->where('is_online_available', 'Yes')
                 ->where(function ($q) use ($query) {
-                    $q->where('title', 'LIKE', "%{$query}%")
-                      ->orWhere('short_description', 'LIKE', "%{$query}%")
-                      ->orWhere('description', 'LIKE', "%{$query}%")
-                      ->orWhereHas('categories', fn($cq) => $cq->where('title', 'LIKE', "%{$query}%"));
+                    $q->where('title', $query)->orWhere('slug', \Illuminate\Support\Str::slug($query));
                 })
                 ->with(['latestStock', 'images'])
                 ->limit($limit)
                 ->get();
+            if (count($hits) < 1) {
+                // Token-based fuzzy match: every significant word must appear
+                // somewhere in title/short description/categories.
+                $tokens = array_values(array_filter(
+                    preg_split('/[^a-z0-9]+/i', $clean) ?: [],
+                    fn ($t) => mb_strlen($t) > 2 && ! in_array($t, ['kg', 'gm', 'pcs', 'fresh'], true)
+                ));
+                foreach ($tokens as $t) {
+                    $t = mb_strtolower($t);
+                    $hits = $hits->merge(
+                        $productModel::where('status', 'Active')
+                            ->where('is_online_available', 'Yes')
+                            ->where(function ($q) use ($t) {
+                                $like = "%{$t}%";
+                                $q->where('title', 'LIKE', $like)
+                                  ->orWhere('short_description', 'LIKE', $like)
+                                  ->orWhereHas('categories', fn($cq) => $cq->where('title', 'LIKE', $like));
+                            })
+                            ->with(['latestStock', 'images'])
+                            ->limit($limit)
+                            ->get()
+                    );
+                }
+                if (empty($tokens)) {
+                    $t = mb_strtolower($clean);
+                    if (mb_strlen($t) > 2) {
+                        $hits = $productModel::where('status', 'Active')
+                            ->where('is_online_available', 'Yes')
+                            ->where(function ($q) use ($t) {
+                                $like = "%{$t}%";
+                                $q->where('title', 'LIKE', $like)
+                                  ->orWhere('short_description', 'LIKE', $like);
+                            })
+                            ->with(['latestStock', 'images'])
+                            ->limit($limit)
+                            ->get();
+                    }
+                }
+                $hits = $hits->unique('id')->take($limit);
+            }
 
-            return $products->map(fn($p) => [
+            return $hits->map(fn($p) => [
                 'id'      => (string) $p->id,
                 'score'   => 0.95,
                 'payload' => [
@@ -155,7 +195,7 @@ class QdrantService
                     'stock'    => (int) ($p->latestStock?->available_quantity ?? 0),
                     'status'   => $p->status,
                 ],
-            ])->toArray();
+            ])->values()->toArray();
         } catch (\Exception $e) {
             Log::warning('[QdrantService] DB fallback search failed', ['error' => $e->getMessage()]);
             return [];

@@ -53,6 +53,8 @@ class GunmaAgentServiceProvider extends ServiceProvider
 
         $this->app->singleton(GreetingInterceptor::class);
 
+        $this->app->singleton(\Anwar\GunmaAgent\Services\GuestCartService::class);
+
         $this->app->singleton(CustomerInsightService::class);
 
         $this->app->singleton(ProactiveTriggerService::class);

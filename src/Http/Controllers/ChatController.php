@@ -7,6 +7,7 @@ namespace Anwar\GunmaAgent\Http\Controllers;
 use Anwar\GunmaAgent\Models\ChatMessage;
 use Anwar\GunmaAgent\Models\ChatSession;
 use Anwar\GunmaAgent\Services\AgentOrchestrator;
+use Anwar\GunmaAgent\Services\GuestCartService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
@@ -171,7 +172,11 @@ class ChatController extends Controller
             // Redis unavailable — proceed without rate limiting
         }
 
-        return new StreamedResponse(function () use ($session, $userMessage) {
+        // Bootstrap the guest cart identity BEFORE the agent runs, so cart
+        // tools work for guests (new guests get a Set-Cookie back).
+        $guest = app(GuestCartService::class)->bootstrap($request, auth('customer')->id());
+
+        $response = new StreamedResponse(function () use ($session, $userMessage) {
             foreach ($this->agent->chatStream($session, $userMessage) as $chunk) {
                 echo $chunk;
                 if (ob_get_level() > 0) {
@@ -180,6 +185,16 @@ class ChatController extends Controller
                 flush();
             }
         }, 200, $this->sseHeaders());
+
+        if (! $guest->customerId() && $guest->isNew()) {
+            $response->headers->setCookie(\Illuminate\Support\Facades\Cookie::make(
+                'guest_id',
+                $guest->encryptedCookie(),
+                60 * 24 * 30, // 30 days in minutes (storefront parity)
+            ));
+        }
+
+        return $response;
     }
 
     /* ── POST /chat/sessions/{id}/messages/sync — Non-streaming ── */
@@ -197,11 +212,22 @@ class ChatController extends Controller
             'message' => 'required|string|max:2000',
         ]);
 
+        $guest = app(GuestCartService::class)->bootstrap($request, auth('customer')->id());
         $reply = $this->agent->chat($session, $validated['message']);
 
-        return response()->json([
+        $response = response()->json([
             'reply' => $reply,
         ]);
+
+        if (! $guest->customerId() && $guest->isNew()) {
+            $response->headers->setCookie(\Illuminate\Support\Facades\Cookie::make(
+                'guest_id',
+                $guest->encryptedCookie(),
+                60 * 24 * 30,
+            ));
+        }
+
+        return $response;
     }
 
     /* ── GET /chat/sessions/{id}/messages — Get message history ── */

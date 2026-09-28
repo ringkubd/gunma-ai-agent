@@ -103,7 +103,14 @@ class PikuFeedController extends Controller
         $items = [];
         $productModel = config('gunma-agent.models.product', \App\Models\Product::class);
 
-        foreach (array_keys($picks) as $pid) {
+        $orderedPids = array_keys(array_filter($picks, fn ($k) => in_array($k, ['cart', 'cart_recovery'], true)));
+        // cart stays first; the rest shuffle for variety
+        $shufflePids = $orderedPids;
+        $otherPids = array_filter(array_keys($picks), fn ($pid) => ! in_array($pid, $orderedPids, true));
+        shuffle($otherPids);
+        $orderedPids = array_merge($orderedPids, $otherPids);
+
+        foreach ($orderedPids as $pid) {
             if (count($items) >= $limit) break;
             try {
                 $product = $productModel::with(['latestStock', 'images'])->find($pid);
@@ -346,7 +353,10 @@ class PikuFeedController extends Controller
             if (! is_array($top)) return [];
 
             arsort($top);
-            return array_map('intval', array_keys(array_slice($top, 0, 10, true)));
+            $keys = array_map('intval', array_keys($top));
+            // random weight-2 slice from the interest candidates — variety
+            shuffle($keys);
+            return array_slice($keys, 0, 6);
         } catch (\Throwable) {
             return [];
         }
@@ -355,14 +365,15 @@ class PikuFeedController extends Controller
     private function trendingProductIds(int $limit): array
     {
         try {
-            return DB::table('order_items')
+            $ids = DB::table('order_items')
                 ->select('product_id', DB::raw('COUNT(*) c'))
                 ->groupBy('product_id')
                 ->orderByDesc('c')
-                ->limit($limit * 3)
+                ->limit($limit * 4)
                 ->pluck('product_id')
-                ->map('intval')
                 ->all();
+            shuffle($ids);
+            return $ids;
         } catch (\Throwable) {
             try {
                 $productModel = config('gunma-agent.models.product', \App\Models\Product::class);

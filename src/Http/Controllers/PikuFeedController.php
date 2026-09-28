@@ -272,8 +272,9 @@ class PikuFeedController extends Controller
 
         // 1) Cart context
         $cart = $this->cartContext($customerId);
+        $justOrdered = (float) ($cart['recent_order_hours'] ?? 99) < 6; // সফল order হলে add-to-cart নয়
 
-        if (! empty($cart['ids'])) {
+        if (! empty($cart['ids']) && ! $justOrdered) {
             $firstPid = (int) reset($cart['ids']);
             $p = $this->productBrief($customerId, $firstPid, $lang);
             if ($p) {
@@ -322,7 +323,9 @@ class PikuFeedController extends Controller
         }
 
         // 5) Cart recovery (stalled carts only)
-        if ($cart['stale_hours'] >= 6) {
+        if ($justOrdered) {
+            // nothing — placed recently; reorder section handles nostalgia without add-to-cart
+        } elseif ($cart['stale_hours'] >= 6) {
             $stale = (int) $cart['stale_hours'];
             $add('cart_recovery', ($lang === 'bn'
                 ? "Apnar cart e item ache ({$stale} hours dhore!) — checkout hoy নাই! Ekhon kore niben? 💬"
@@ -433,13 +436,13 @@ class PikuFeedController extends Controller
      */
     private function cartContext(?int $customerId): array
     {
-        if (! $customerId) return ['ids' => [], 'stale_hours' => 0.0];
+        if (! $customerId) return ['ids' => [], 'stale_hours' => 0.0, 'recent_order_hours' => 99.0];
         try {
             $cart = config('gunma-agent.models.cart', \App\Models\Cart::class);
-            if (! class_exists($cart)) return ['ids' => [], 'stale_hours' => 0.0];
+            if (! class_exists($cart)) return ['ids' => [], 'stale_hours' => 0.0, 'recent_order_hours' => 99.0];
 
             $rows = $cart::where('customer_id', $customerId)->whereNull('deleted_at')->get(['product_id', 'created_at']);
-            if ($rows->isEmpty()) return ['ids' => [], 'stale_hours' => 0.0];
+            if ($rows->isEmpty()) return ['ids' => [], 'stale_hours' => 0.0, 'recent_order_hours' => $this->lastOrderHours($customerId)];
 
             $ids = $rows->pluck('product_id')->unique()->all();
             $stale = 0.0;
@@ -455,10 +458,20 @@ class PikuFeedController extends Controller
                 $recentOrder = $orderedSince ? now()->diffInHours($orderedSince) : 99;
                 $stale = $recentOrder > 6 ? round(max(0.0, (float) $hours), 1) : max(0.0, min($hours, 5.9));
             }
-            return ['ids' => $ids, 'stale_hours' => $stale];
+            return ['ids' => $ids, 'stale_hours' => $stale, 'recent_order_hours' => $this->lastOrderHours($customerId)];
         } catch (\Throwable) {
-            return ['ids' => [], 'stale_hours' => 0.0];
+            return ['ids' => [], 'stale_hours' => 0.0, 'recent_order_hours' => 99.0];
         }
+    }
+
+    private function lastOrderHours(?int $customerId): float
+    {
+        try {
+            $m = config('gunma-agent.models.order', \App\Models\Order::class);
+            if (! $m || ! class_exists($m)) return 99.0;
+            $last = $m::where('customer_id', $customerId)->max('created_at');
+            return $last ? round((float) now()->diffInHours($last), 1) : 99.0;
+        } catch (\Throwable) { return 99.0; }
     }
 
     private function lastOrderProductIds(?int $customerId): array

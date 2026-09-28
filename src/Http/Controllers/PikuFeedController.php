@@ -264,7 +264,7 @@ class PikuFeedController extends Controller
             } catch (\Throwable) {}
         }
         $greet = match ($lang) {
-            'bn' => $name ? "Apni to ribol holen {$name}! Aaj ki lagbe? 😊" : 'Aaj ki ranna korben? Bolo, ber kore de!',
+            'bn' => $name ? "Apni to ribol holen {$name}! Aaj ki lagbe? 😊" : 'Assalamu alaikum! Aaj ki ranna hobe? Ami ready 🍳',
             'hi' => $name ? "नमस्ते {$name}! आज क्या बनाएंगे?" : 'नमस्ते! आज मैं क्या दिला दूँ? 💬',
             default => $name ? "Hello {$name}! What are we cooking today? 😊" : 'Hi! What can I get for you today? 💬',
         };
@@ -345,6 +345,25 @@ class PikuFeedController extends Controller
                     ['label' => ($lang === 'bn' ? 'Add koro' : 'Add to cart'), 'prefill' => "{$p['title']} cart e add koro"],
                 ];
                 $add('spotlight', ($lang === 'bn' ? 'Piku মনে রাখল — ' : 'Piku picked just for you — ') . $p['text'] . ' (' . $p['price_line'] . ')', $p, $chips);
+            }
+        }
+
+        // 7) Anonymous filler: popular products so the pool is not greet-only
+        if ($customerId === null) {
+            try {
+                $pm = config('gunma-agent.models.product', \App\Models\Product::class);
+                $pids = $pm::where('status', 'Active')->where('is_online_available', 'Yes')
+                    ->inRandomOrder()->limit(max(0, 3 - count($out)))->pluck('id')->all();
+            } catch (\Throwable) { $pids = []; }
+            foreach ($pids as $pid) {
+                if (count($out) >= $limit) break;
+                if ($p = $this->productBrief(null, (int) $pid, $lang)) {
+                    $chips = [
+                        ['label' => ($lang === 'bn' ? 'Recipe dao' : 'Recipe please'), 'prefill' => "{$p['title']} er recipe dao"],
+                        ['label' => ($lang === 'bn' ? 'Add koro' : 'Add to cart'), 'prefill' => "{$p['title']} cart e add koro"],
+                    ];
+                    $add('spotlight', ($lang === 'bn' ? 'Ajker special — ' : "Today's pick — ") . $p['title'] . ' (' . $p['price_line'] . ')', $p, $chips);
+                }
             }
         }
 

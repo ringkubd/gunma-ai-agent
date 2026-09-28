@@ -107,6 +107,8 @@ class GunmaAgentServiceProvider extends ServiceProvider
                 \Anwar\GunmaAgent\Commands\InstallCommand::class,
                 \Anwar\GunmaAgent\Commands\SeedRecipesCommand::class,
                 \Anwar\GunmaAgent\Commands\GenerateProductBlurbsCommand::class,
+                \Anwar\GunmaAgent\Commands\ReindexProductsCommand::class,
+                \Anwar\GunmaAgent\Commands\SeedKbCommand::class,
             ]);
         }
 

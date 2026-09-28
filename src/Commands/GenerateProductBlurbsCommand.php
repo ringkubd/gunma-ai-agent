@@ -28,6 +28,8 @@ class GenerateProductBlurbsCommand extends Command
         {--lang=* : Languages to generate (default en,bn,hi)}
         {--limit=0 : Max products this run (0 = all)}
         {--product= : Only this product id}
+        {--from= : Only products with id >= this}
+        {--to= : Only products with id <= this}
         {--force : Regenerate even if unchanged}
         {--sleep=0 : Milliseconds to sleep between LLM calls}';
 
@@ -57,6 +59,12 @@ class GenerateProductBlurbsCommand extends Command
         $query = $productModel::query()->where('status', 'Active');
         if ($productId) {
             $query->where('id', $productId);
+        }
+        if ($this->option('from')) {
+            $query->where('id', '>=', (int) $this->option('from'));
+        }
+        if ($this->option('to')) {
+            $query->where('id', '<=', (int) $this->option('to'));
         }
 
         $total = (clone $query)->count();

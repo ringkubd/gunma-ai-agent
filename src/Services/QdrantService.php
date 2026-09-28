@@ -299,6 +299,60 @@ class QdrantService
         }
     }
 
+    /**
+     * Bulk-upsert support-KB entries (batched embeddings). Stable IDs keep
+     * re-seeds idempotent.
+     *
+     * @param array<int,array{title:string,content:string,category?:string,tags?:array}> $entries
+     */
+    public function upsertKbBulk(array $entries, int $batch = 16): int
+    {
+        if (empty($entries)) {
+            return 0;
+        }
+
+        $texts = array_map(
+            fn ($e) => trim(($e['title'] ?? '') . ' ' . ($e['content'] ?? '') . ' ' . implode(' ', $e['tags'] ?? [])),
+            $entries
+        );
+
+        $embedded = 0;
+        foreach (array_chunk($entries, max(1, $batch), true) as $chunkIndex => $chunk) {
+            $sliceTexts = array_slice($texts, $chunkIndex * $batch, count($chunk));
+            try {
+                $vectors = $this->embeddingService->embedBulk($sliceTexts);
+            } catch (\Throwable $e) {
+                Log::error('[QdrantService] KB embedding failed', ['error' => $e->getMessage()]);
+                continue;
+            }
+
+            $points = [];
+            foreach (array_values($chunk) as $i => $entry) {
+                $vector = $vectors[$i] ?? null;
+                if (empty($vector) || count($vector) < 64) {
+                    continue;
+                }
+                $points[] = [
+                    'id' => $this->generateUuid(md5('kb_' . ($entry['title'] ?? uniqid()))),
+                    'vector' => $vector,
+                    'payload' => [
+                        'type' => 'kb',
+                        'title' => $entry['title'] ?? '',
+                        'content' => $entry['content'] ?? '',
+                        'category' => $entry['category'] ?? 'support',
+                        'tags' => $entry['tags'] ?? [],
+                        'source' => 'beta_knowledge_base',
+                    ],
+                ];
+            }
+            if (! empty($points)) {
+                $this->bulkUpsert($this->collections['kb'], $points);
+                $embedded += count($points);
+            }
+        }
+        return $embedded;
+    }
+
     /* ── Upsert Logic ──────────────────────────────────────────── */
 
     /**

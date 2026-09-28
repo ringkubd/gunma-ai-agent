@@ -106,6 +106,7 @@ class GunmaAgentServiceProvider extends ServiceProvider
                 \Anwar\GunmaAgent\Commands\SyncDataToQdrantCommand::class,
                 \Anwar\GunmaAgent\Commands\InstallCommand::class,
                 \Anwar\GunmaAgent\Commands\SeedRecipesCommand::class,
+                \Anwar\GunmaAgent\Commands\GenerateProductBlurbsCommand::class,
             ]);
         }
 

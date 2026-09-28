@@ -1432,15 +1432,7 @@ class ToolExecutor
     public static function getToolDefinitions(): array
     {
         return [
-            [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'get_featured_recipe',
-                    'description' => 'Get a random featured halal recipe.',
-                    'parameters' => ['type' => 'object', 'properties' => (object)[]],
-                ],
-            ],
-            [
+                        [
                 'type' => 'function',
                 'function' => [
                     'name' => 'search_products_bulk',
@@ -1517,23 +1509,7 @@ class ToolExecutor
                     ],
                 ],
             ],
-            [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'cache_new_recipe',
-                    'description' => 'Save a new recipe for future users.',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'title' => ['type' => 'string'],
-                            'ingredients' => ['type' => 'array', 'items' => ['type' => 'string']],
-                            'instructions' => ['type' => 'string'],
-                        ],
-                        'required' => ['title', 'ingredients', 'instructions'],
-                    ],
-                ],
-            ],
-            [
+                        [
                 'type' => 'function',
                 'function' => [
                     'name' => 'get_order_status',
@@ -1721,22 +1697,7 @@ class ToolExecutor
                     ],
                 ],
             ],
-            [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'apply_coupon',
-                    'description' => 'Validate a coupon/promo code and calculate the discount.',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'code' => ['type' => 'string', 'description' => 'Coupon code.'],
-                            'cart_total' => ['type' => 'number', 'description' => 'Current cart total for discount calculation.'],
-                        ],
-                        'required' => ['code'],
-                    ],
-                ],
-            ],
-            [
+                        [
                 'type' => 'function',
                 'function' => [
                     'name' => 'submit_product_review',
@@ -1831,33 +1792,7 @@ class ToolExecutor
                     ],
                 ],
             ],
-            [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'seasonal_suggestions',
-                    'description' => 'Get time-of-day, day-of-week, and seasonal product suggestions. Knows Ramadan/Eid specials.',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => (object)[],
-                    ],
-                ],
-            ],
-            [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'get_context_summary',
-                    'description' => 'Get a summary of previous conversations with this customer for context.',
-                    'parameters' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'session_id' => ['type' => 'string', 'description' => 'Current session ID.'],
-                            'customer_id' => ['type' => 'integer', 'description' => 'Customer ID if logged in.'],
-                        ],
-                        'required' => ['session_id'],
-                    ],
-                ],
-            ],
-            [
+                                    [
                 'type' => 'function',
                 'function' => [
                     'name' => 'hand_off_to_human',

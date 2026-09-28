@@ -88,6 +88,7 @@ Route::prefix(config('gunma-agent.admin_route_prefix', 'api/admin/chat'))
         Route::get('/settings/doodle', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'doodle']);
         Route::put('/settings/doodle', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'updateDoodle']);
         Route::get('/settings/widget', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'widget']);
+        Route::get('/piku-coverage', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'coverage']);
         Route::put('/settings/widget', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'updateWidget']);
         Route::post('/reindex', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'reindex']);
     });

@@ -133,6 +133,64 @@ class PikuFeedController extends Controller
             ->header('Cache-Control', 'no-store');
     }
 
+    /* ── Admin: Phase-2 coverage panel (Piku Monitor) ─────────────── */
+
+    /** GET /api/admin/chat/piku-coverage */
+    public function coverage(): JsonResponse
+    {
+        $blurbProductIds = 0;
+        $byLang = [];
+        try {
+            $byLang = DB::table('piku_product_blurbs')->select('lang', DB::raw('COUNT(*) c'))->groupBy('lang')->pluck('c', 'lang')->all();
+            $blurbTable = DB::getSchemaBuilder()->hasTable('piku_product_blurbs');
+            $blurbTotal = $blurbTable ? DB::table('piku_product_blurbs')->count() : 0;
+        } catch (\Throwable $e) {
+            $blurbTable = false;
+            $blurbTotal = 0;
+        }
+
+        try {
+            $blurbCovered = $blurbTable
+                ? DB::table('piku_product_blurbs')->distinct()->count('product_id')
+                : 0;
+            $productModel = config('gunma-agent.models.product', \App\Models\Product::class);
+            $activeTotal = $productModel::where('status', 'Active')->where('is_online_available', 'Yes')->count();
+        } catch (\Throwable $e) {
+            $blurbCovered = 0;
+            $activeTotal = 0;
+        }
+
+        $kbPoints = 0;
+        $productPoints = 0;
+        $fetchPoints = function (string $collection) use (&$productData) {
+            try {
+                $url = rtrim((string) config('gunma-agent.qdrant_url'), '/') . '/collections/'
+                    . config('gunma-agent.qdrant_collection_prefix', '') . $collection;
+                $ctx = stream_context_create(['http' => ['timeout' => 6]]);
+                $raw = @file_get_contents($url, false, $ctx);
+                if ($raw === false) return 0;
+                $j = json_decode((string) $raw, true);
+                return (int) ($j['result']['points_count'] ?? 0);
+            } catch (\Throwable) {
+                return 0;
+            }
+        };
+        $kbPoints = $fetchPoints(config('gunma-agent.qdrant_collections.kb', 'gunmahal_kb'));
+        $productPoints = $fetchPoints(config('gunma-agent.qdrant_collections.products', 'products'));
+
+        $productData = [
+            'blurbs' => [
+                'covered_products' => $blurbCovered,
+                'active_products' => $activeTotal,
+                'pct' => $activeTotal > 0 ? round($blurbCovered / max(1, $activeTotal) * 100, 1) : 0,
+                'by_lang' => $byLang,
+            ],
+            'products_indexed' => $productPoints,
+            'kb_entries' => $kbPoints,
+        ];
+        return response()->json(['data' => $productData]);
+    }
+
     private function blurbFor(int $productId, string $lang): ?string
     {
         try {

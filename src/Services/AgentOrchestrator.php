@@ -457,96 +457,67 @@ class AgentOrchestrator
             }
         }
 
-        // 1. Person (account details)
+        // 1. Person — compact (only what changes the tone of conversation)
         $c = $profile['customer'] ?? null;
         if ($c) {
-            $lines[] = "- Account: #{$c['id']} — joined " . ($c['joined_at'] ? substr((string) $c['joined_at'], 0, 10) : 'unknown');
-            if (! empty($c['name']))    $lines[] = "- Full name: {$c['name']}";
-            if (! empty($c['email']))   $lines[] = "- Email: {$c['email']}";
-            if (! empty($c['phone']))   $lines[] = "- Phone: {$c['phone']}";
-            if (! empty($c['country'])) $lines[] = "- Country: {$c['country']}";
-            if (! empty($c['native_language'])) $lines[] = "- Native language: {$c['native_language']}";
-            if (! empty($c['type']))    $lines[] = "- Customer type: {$c['type']}";
-            if (! empty($c['status']))  $lines[] = "- Account status: {$c['status']}";
-            if ($c['points'] > 0)       $lines[] = "- Loyalty points: {$c['points']}";
-            if ($c['wallet'] > 0)       $lines[] = "- Wallet balance: ¥{$c['wallet']}";
+            $bits = [];
+            if (! empty($c['name']))   $bits[] = "name: {$c['name']}";
+            if (! empty($c['native_language'])) $bits[] = "language: {$c['native_language']}";
+            if ($c['points'] > 0)      $bits[] = "points: {$c['points']}";
+            if ($c['wallet'] > 0)      $bits[] = "wallet: ¥{$c['wallet']}";
+            if (! empty($c['phone']))  $bits[] = "phone: {$c['phone']}";
+            if (! empty($c['status']) && strtolower((string) $c['status']) !== 'active') $bits[] = "status: {$c['status']}";
+            $lines[] = '- Customer: ' . implode(', ', $bits);
         } else {
-            $lines[] = "- Account: guest visitor (" . ($profile['session']['visitor_id'] ?? '') . ")";
+            $lines[] = '- Customer: guest visitor';
         }
 
-        // 2. Saved addresses (know where they live / deliver to)
+        // 2. Default address only (single compact line)
         $addresses = $profile['addresses'] ?? [];
         if (! empty($addresses)) {
-            foreach (array_slice($addresses, 0, 3) as $a) {
-                $addr = array_filter([
-                    $a['name'] ?? null,
-                    $a['phone'] ?? null,
-                    $a['street'] ?? null,
-                    $a['apartment'] ?? null,
-                    $a['city'] ?? null,
-                    $a['state'] ?? null,
-                    $a['postal_code'] ?? null,
-                ]);
-                if ($addr) {
-                    $lines[] = "- Saved address" . (! empty($a['is_default']) ? ' (DEFAULT — use for checkout)' : '') . ': ' . implode(', ', $addr);
-                }
+            $def = null;
+            foreach ($addresses as $a) {
+                if (! empty($a['is_default'])) { $def = $a; break; }
+            }
+            $a = $def ?? $addresses[0];
+            $line = array_filter([
+                $a['city'] ?? null,
+                $a['state'] ?? null,
+                $a['postal_code'] ?? null,
+            ]);
+            if ($line) {
+                $lines[] = '- Delivery goes to: ' . implode(', ', $line)
+                    . (empty($a['is_default']) ? '' : ' (default)');
             }
         }
 
-        // 3. Recent orders
-        $orders = array_slice($profile['orders'] ?? [], 0, 5);
-        if (! empty($orders)) {
-            $lines[] = '- Recent orders:';
-            foreach ($orders as $o) {
-                $lines[] = "  * #{$o['id']} — {$o['status']} / payment {$o['payment_status']} — ¥" . number_format((float) $o['total_amount']) . ($o['delivery_date'] ? " — delivery {$o['delivery_date']}" : '') . ' — ' . substr((string) $o['created_at'], 0, 10);
-            }
+        // 3. Recent orders — max 3, compact
+        foreach (array_slice($profile['orders'] ?? [], 0, 3) as $o) {
+            $lines[] = "- Order #{$o['id']}: {$o['status']} / {$o['payment_status']} — ¥" . number_format((float) $o['total_amount']) . ($o['delivery_date'] ? ", delivery {$o['delivery_date']}" : '');
         }
         $m = $profile['metrics'] ?? [];
-        if (($m['orders_count'] ?? 0) > 0) {
-            $lines[] = "- Total earned orders: {$m['orders_count']}, total spent ¥" . number_format((float) ($m['total_spent'] ?? 0), 2) . ", avg order ¥" . number_format((float) ($m['avg_order'] ?? 0), 2);
+        if (($m['orders_count'] ?? 0) > 2) {
+            $lines[] = "- Lifetime: {$m['orders_count']} orders, ¥" . number_format((float) ($m['total_spent'] ?? 0)) . ' total';
         }
 
-        // 4. Cart contents (titles + totals)
+        // 4. Live cart (compact)
         $cart = $profile['cart'] ?? [];
         if (! empty($cart)) {
-            $lines[] = '- Cart right now (' . count($cart) . ' items):';
-            foreach (array_slice($cart, 0, 8) as $ci) {
-                $lines[] = "  * {$ci['title']} ×{$ci['quantity']} — ¥" . number_format((float) $ci['line_total']);
-            }
+            $items = array_slice($cart, 0, 6);
+            $lines[] = '- Cart (' . count($cart) . ' items): ' . implode('; ', array_map(
+                fn ($ci) => "{$ci['title']} ×{$ci['quantity']}",
+                $items
+            ));
         }
 
-        // 5. Long-term interests (built day by day from their behaviour)
+        // 5. Interests — short
         $i = $profile['interest'] ?? [];
         if (! empty($i['top_products'])) {
-            $names = array_map(fn ($p) => $p['title'], array_slice($i['top_products'], 0, 8));
-            $lines[] = '- Most interested in (browsed/carted, highest first): ' . implode(', ', $names);
+            $names = array_map(fn ($p) => $p['title'], array_slice($i['top_products'], 0, 5));
+            $lines[] = '- Likes: ' . implode(', ', $names);
         }
         if (! empty($i['top_categories'])) {
-            $lines[] = '- Favorite categories: ' . implode(', ', array_slice($i['top_categories'], 0, 6));
-        }
-        if (! empty($i['top_search_keywords'])) {
-            $lines[] = '- Recent searches on our site: ' . implode(', ', array_slice($i['top_search_keywords'], 0, 8));
-        }
-        if (! empty($i['active_days']) || ! empty($i['session_count'])) {
-            $lines[] = "- Engagement: {$i['active_days']} active days, {$i['session_count']} sessions" . (! empty($i['last_activity_at']) ? ', last active ' . substr((string) $i['last_activity_at'], 0, 16) : '');
-        }
-
-        // 6. Store behaviour (recent searches / page views / product views)
-        $act = $profile['activity'] ?? [];
-        if (! empty($act['recent_searches'])) {
-            $lines[] = '- Last site searches: ' . implode(', ', array_slice($act['recent_searches'], 0, 6));
-        }
-        $lastProductView = null;
-        foreach (($act['recent'] ?? []) as $ra) {
-            if (($ra['action'] ?? '') === 'product_view' && ! empty($ra['product_id'])) {
-                $lastProductView = $ra;
-                break;
-            }
-        }
-        if ($lastProductView) {
-            $pid = $lastProductView['title'] ?? ('#' . $lastProductView['product_id']);
-            $when = substr((string) ($lastProductView['logged_at'] ?? ''), 0, 16);
-            $lines[] = "- Was just looking at product: {$pid} ({$when}) — a natural moment to offer that item or its ingredients.";
+            $lines[] = '- Favorite categories: ' . implode(', ', array_slice($i['top_categories'], 0, 4));
         }
 
         if (empty($lines)) {

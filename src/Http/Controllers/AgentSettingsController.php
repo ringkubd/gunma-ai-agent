@@ -191,6 +191,9 @@ class AgentSettingsController extends Controller
             'doodle' => [
                 'enabled' => $this->settings->bool('doodle_enabled', true),
             ],
+            'widget' => [
+                'enabled' => $this->settings->bool('widget_enabled', true),
+            ],
         ])->header('Cache-Control', 'no-cache');
     }
 
@@ -222,6 +225,39 @@ class AgentSettingsController extends Controller
 
         return response()->json([
             'data' => ['doodle_enabled' => $validated['enabled']],
+        ]);
+    }
+
+    /* ── Piku Chat Widget (whole widget) controls ──────────────── */
+
+    /**
+     * Admin read.
+     * GET /api/admin/chat/settings/widget
+     */
+    public function widget(): JsonResponse
+    {
+        return response()->json([
+            'data' => [
+                'widget_enabled' => $this->settings->bool('widget_enabled', true),
+            ],
+        ]);
+    }
+
+    /**
+     * Admin write.
+     * PUT /api/admin/chat/settings/widget { enabled: bool }
+     */
+    public function updateWidget(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'enabled' => 'required|boolean',
+        ]);
+
+        $this->settings->set('widget_enabled', $validated['enabled'] ? '1' : '0');
+        $this->settings->flush();
+
+        return response()->json([
+            'data' => ['widget_enabled' => $validated['enabled']],
         ]);
     }
 }

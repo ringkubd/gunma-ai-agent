@@ -39,6 +39,7 @@ class AgentSettingsService
         'embedding_dims',
         // Storefront feature flags
         'doodle_enabled',
+        'widget_enabled',
     ];
 
     /** @var array<string,string|null>|null */
@@ -142,6 +143,8 @@ class AgentSettingsService
             'embedding_api_key'      => config('gunma-agent.embedding.api_key'),
             'embedding_model'        => config('gunma-agent.embedding.model'),
             'embedding_dims'         => (string) config('gunma-agent.embedding.dims', 768),
+            'doodle_enabled'         => '1',
+            'widget_enabled'         => '1',
         ];
     }
 }

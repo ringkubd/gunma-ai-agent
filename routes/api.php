@@ -39,8 +39,10 @@ Route::prefix($prefix)
         Route::put('/sessions/{id}/profile', [ChatController::class, 'updateGuestProfile']);
         Route::post('/sessions/{id}/page-context', [ChatController::class, 'pageContext']);
         Route::get('/agent-features', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'publicFeatures']);
-        Route::get('/products/briefs', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'briefs']);
-        Route::get('/piku-suggestions', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'suggestions']);
+        Route::get('/products/briefs', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'briefs'])
+            ->middleware('throttle:60,1');
+        Route::get('/piku-suggestions', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'suggestions'])
+            ->middleware('throttle:30,1');
         Route::post('/cart/bulk', [ChatController::class, 'bulkAddToCart']);
     });
 

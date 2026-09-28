@@ -74,10 +74,11 @@ class PikuFeedController extends Controller
 
         $lang = $this->resolveLang($request, $customerId);
         $picks = []; // product_id => kind
+        $cart = $this->cartContext($customerId);
 
-        // 1) Cart (most relevant)
-        foreach ($this->cartProductIds($customerId) as $id) {
-            $picks[$id] = 'cart';
+        // 1) Cart (most relevant; abandoned carts may become a recovery nudge)
+        foreach ($cart['ids'] as $id) {
+            $picks[$id] = ($cart['stale_hours'] >= 6) ? 'cart_recovery' : 'cart';
         }
 
         // 2) Last order (reorder)
@@ -129,8 +130,11 @@ class PikuFeedController extends Controller
             }
         }
 
-        return response()->json(['data' => $items, 'lang' => $lang])
-            ->header('Cache-Control', 'no-store');
+        return response()->json([
+            'data' => $items,
+            'lang' => $lang,
+            'cart_stale_hours' => $cart['stale_hours'],
+        ])->header('Cache-Control', 'no-store');
     }
 
     /* ── Admin: Phase-2 coverage panel (Piku Monitor) ─────────────── */
@@ -178,8 +182,21 @@ class PikuFeedController extends Controller
         $kbPoints = $fetchPoints(config('gunma-agent.qdrant_collections.kb', 'gunmahal_kb'));
         $productPoints = $fetchPoints(config('gunma-agent.qdrant_collections.products', 'products'));
 
+        $chats24 = 0;
+        $msgs24 = 0;
+        try {
+            if (DB::getSchemaBuilder()->hasTable('chat_sessions')) {
+                $chats24 = DB::table('chat_sessions')->where('created_at', '>=', now()->subDay())->count();
+            }
+            if (DB::getSchemaBuilder()->hasTable('chat_messages')) {
+                $msgs24 = DB::table('chat_messages')->where('created_at', '>=', now()->subDay())->count();
+            }
+        } catch (\Throwable) {}
+
         $productData = [
-            'blurbs' => [
+            'chats_24h' => $chats24,
+            'messages_24h' => $msgs24,
+            'blurbs' => [ 
                 'covered_products' => $blurbCovered,
                 'active_products' => $activeTotal,
                 'pct' => $activeTotal > 0 ? round($blurbCovered / max(1, $activeTotal) * 100, 1) : 0,
@@ -246,15 +263,39 @@ class PikuFeedController extends Controller
         };
     }
 
-    private function cartProductIds(?int $customerId): array
+    /**
+     * Cart product ids + staleness (hours since the OLDEST un-completed cart
+     * row). Stale >= 6h is treated as an abandoned-cart recovery moment.
+     *
+     * @return array{ids: array, stale_hours: float}
+     */
+    private function cartContext(?int $customerId): array
     {
-        if (! $customerId) return [];
+        if (! $customerId) return ['ids' => [], 'stale_hours' => 0.0];
         try {
             $cart = config('gunma-agent.models.cart', \App\Models\Cart::class);
-            if (! class_exists($cart)) return [];
-            return $cart::where('customer_id', $customerId)->whereNull('deleted_at')->pluck('product_id')->unique()->all();
+            if (! class_exists($cart)) return ['ids' => [], 'stale_hours' => 0.0];
+
+            $rows = $cart::where('customer_id', $customerId)->whereNull('deleted_at')->get(['product_id', 'created_at']);
+            if ($rows->isEmpty()) return ['ids' => [], 'stale_hours' => 0.0];
+
+            $ids = $rows->pluck('product_id')->unique()->all();
+            $stale = 0.0;
+            if ($cart::where('customer_id', $customerId)->whereNull('deleted_at')->exists()) {
+                // only counts as abandoned if nothing has been ordered since
+                $lastOrder = config('gunma-agent.models.order', \App\Models\Order::class);
+                $orderedSince = $lastOrder && class_exists($lastOrder)
+                    ? $lastOrder::where('customer_id', $customerId)->max('created_at')
+                    : null;
+
+                $oldest = $rows->min('created_at');
+                $hours = $oldest ? now()->diffInHours($oldest) : 0;
+                $recentOrder = $orderedSince ? now()->diffInHours($orderedSince) : 99;
+                $stale = $recentOrder > 6 ? round(max(0.0, (float) $hours), 1) : max(0.0, min($hours, 5.9));
+            }
+            return ['ids' => $ids, 'stale_hours' => $stale];
         } catch (\Throwable) {
-            return [];
+            return ['ids' => [], 'stale_hours' => 0.0];
         }
     }
 

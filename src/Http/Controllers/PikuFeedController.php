@@ -41,13 +41,15 @@ class PikuFeedController extends Controller
 
         $rows = PikuProductBlurb::whereIn('product_id', $ids)
             ->whereIn('lang', [$lang, 'en'])
+            ->inRandomOrder()
             ->get();
 
         $map = [];
         foreach ($ids as $id) {
-            // prefer requested lang, fall back to English
-            $text = $rows->firstWhere(fn ($r) => (int) $r->product_id === $id && $r->lang === $lang)?->text
-                ?? $rows->firstWhere(fn ($r) => (int) $r->product_id === $id && $r->lang === 'en')?->text;
+            $own = $rows->filter(fn ($r) => (int) $r->product_id === $id && $r->lang === $lang);
+            $base = $rows->filter(fn ($r) => (int) $r->product_id === $id && $r->lang === 'en');
+            $pool = $own->isNotEmpty() ? $own : $base;
+            $text = $pool->first()?->text;
             if ($text) {
                 $map[(string) $id] = $text;
             }
@@ -193,9 +195,21 @@ class PikuFeedController extends Controller
             }
         } catch (\Throwable) {}
 
+        $doodleClicks24 = 0;
+        try {
+            if (DB::getSchemaBuilder()->hasTable('chat_messages')) {
+                $doodleClicks24 = DB::table('chat_messages')
+                    ->where('role', 'user')
+                    ->where('created_at', '>=', now()->subDay())
+                    ->where('content', 'LIKE', 'Ei product ta niye aro jante chai%')
+                    ->count();
+            }
+        } catch (\Throwable) {}
+
         $productData = [
             'chats_24h' => $chats24,
             'messages_24h' => $msgs24,
+            'doodle_clicks_24h' => $doodleClicks24,
             'blurbs' => [ 
                 'covered_products' => $blurbCovered,
                 'active_products' => $activeTotal,
@@ -211,12 +225,12 @@ class PikuFeedController extends Controller
     private function blurbFor(int $productId, string $lang): ?string
     {
         try {
-            $row = PikuProductBlurb::where('product_id', $productId)
+            $rows = PikuProductBlurb::where('product_id', $productId)
                 ->whereIn('lang', [$lang, 'en'])
-                ->get()
-                ->sortBy(fn ($r) => $r->lang === $lang ? 0 : 1)
-                ->first();
-            return $row?->text;
+                ->inRandomOrder()
+                ->get();
+            $rows = $rows->sortBy(fn ($r) => $r->lang === $lang ? 0 : 1);
+            return $rows->first()?->text;
         } catch (\Throwable) {
             return null;
         }

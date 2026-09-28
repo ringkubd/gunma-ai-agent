@@ -1432,7 +1432,23 @@ class ToolExecutor
     public static function getToolDefinitions(): array
     {
         return [
-                        [
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'cache_new_recipe',
+                    'description' => 'After YOU compose a recipe yourself (when stored recipes had no match), save it for other customers.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'title' => ['type' => 'string'],
+                            'ingredients' => ['type' => 'array', 'items' => ['type' => 'string']],
+                            'instructions' => ['type' => 'string'],
+                        ],
+                        'required' => ['title', 'ingredients', 'instructions'],
+                    ],
+                ],
+            ],
+            [
                 'type' => 'function',
                 'function' => [
                     'name' => 'search_products_bulk',

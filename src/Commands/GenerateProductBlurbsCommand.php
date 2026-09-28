@@ -31,7 +31,8 @@ class GenerateProductBlurbsCommand extends Command
         {--from= : Only products with id >= this}
         {--to= : Only products with id <= this}
         {--force : Regenerate even if unchanged}
-        {--sleep=0 : Milliseconds to sleep between LLM calls}';
+        {--sleep=0 : Milliseconds to sleep between LLM calls}
+        {--variant=0 : Blurb variety slot (0,1,2) — fill later nightly}';
 
     protected $description = 'Pre-generate AI product blurbs for the Piku doodle';
 
@@ -91,7 +92,10 @@ class GenerateProductBlurbsCommand extends Command
                 $hash = md5($title . '|' . mb_substr($desc, 0, 600) . '|' . $category);
 
                 foreach ($langs as $lang) {
-                    $existing = PikuProductBlurb::where('product_id', $product->id)->where('lang', $lang)->first();
+                    $existing = PikuProductBlurb::where('product_id', $product->id)
+                        ->where('lang', $lang)
+                        ->where('variant', (int) $this->option('variant'))
+                        ->first();
                     if ($existing && ! $force && $existing->source_hash === $hash) {
                         $skipped++;
                         continue;
@@ -104,7 +108,7 @@ class GenerateProductBlurbsCommand extends Command
                     }
 
                     PikuProductBlurb::updateOrCreate(
-                        ['product_id' => $product->id, 'lang' => $lang],
+                        ['product_id' => $product->id, 'lang' => $lang, 'variant' => (int) $this->option('variant')],
                         ['text' => $text, 'source_hash' => $hash, 'generated_at' => now()]
                     );
                     $done++;
@@ -162,7 +166,7 @@ class GenerateProductBlurbsCommand extends Command
                     ['role' => 'system', 'content' => $system],
                     ['role' => 'user', 'content' => $user],
                 ],
-                'temperature' => 0.6,
+                'temperature' => min(0.95, 0.6 + 0.15 * (int) $this->option('variant')),
             ]);
 
             if (! $res->ok()) {

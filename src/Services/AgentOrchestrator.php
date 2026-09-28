@@ -350,19 +350,9 @@ class AgentOrchestrator
         if ($triggers['eid_coming']) $nowLines[] = "- EID COMING: Suggest premium cuts, sweets, cooking essentials.";
         $parts[] = implode("\n", $nowLines);
 
-        // Weather (best-effort, cached) for weather-aware suggestions.
-        try {
-            $weather = app(\Anwar\GunmaAgent\Services\WeatherService::class)
-                ->forLocation($ctx['prefecture'] ?? null);
-            if (!empty($weather)) {
-                $parts[] = "## WEATHER NOW\n- Location: " . ($ctx['prefecture'] ?? 'Japan')
-                    . "\n- Current: {$weather['summary']}"
-                    . "\n- You MAY reflect the weather in a light, varied way (warm comfort food on a cold/rainy day, cool items on a hot day). "
-                    . "Never default to the same dish (e.g. do NOT keep suggesting khichuri). Pick from the customer's actual request or wide general variety.";
-            }
-        } catch (\Exception $e) {
-            // ignore
-        }
+        // Weather: intentionally NOT injected. The agent used to over-talk about
+        // rain/cold and repeat it endlessly, so it must never bring up weather
+        // on its own. (Only respond if the customer explicitly mentions it.)
 
         // User context
         if ($ctx) {
@@ -659,14 +649,17 @@ When the customer speaks naturally, YOU decide and call the right tools automati
 - "amar X lagbe / X dao / X lagbe bhai" → search_products_bulk (or filter_products) → present the match → add_item_to_cart when they confirm.
 - "cart e add koro / add this" → add_item_to_cart / bulk_add_to_cart.
 - "order korte chai / I want to order" → get_cart_contents first, confirm delivery address/date naturally, then guide to checkout.
-- "order kothay / amar order" → get_order_status (use order id/tracking, or the logged-in customer's latest).
+- "order kothay / amar order / order status" → get_order_status with the order number they give (NO login/email needed). Only the owner-email case reveals the address.
+- "order change / date bodlao / cancel koro" → update_pending_order (PENDING only; needs login OR the order email). If not pending, offer a support ticket instead.
 - "delivery kobe / koto din" → check_delivery_time / check_stock_availability with post code.
 - "kichu jante chai / info" → search_support_kb, then answer conversationally.
 - "problem / complaint / payment issue" → create_support_ticket; missing/damaged → create_order_claim.
 - "password bhule gechi / change password / forgot password" → search_support_kb for the exact steps; if they actually want to log in, call open_login (the login form opens inside chat — never push them to a website just for this).
 - Cart engineering: "remove koro/bad diye dao" → remove_item_from_cart; "2 ta koro/ek maal byobohar" → update_cart_quantity; "cart khali koro" → clear_cart.
 - **CART TOOLS = ONE CALL, FAST REPLY:** when the customer asks to add/remove/update/clear cart items, call ONLY the specific tool (no get_cart_contents before it, no extra recommendations after it) and confirm in the same reply. Extra tool calls make the customer wait a long time for nothing.
-- Weather gossip: never claim actual rain/temperature/sun unless the WEATHER NOW context is present for this customer — if you don't know their location, say honestly you can't see their weather and ask which city they're in.
+- Weather rule: NEVER bring up the weather, rain, cold, or seasons on your own — the shop is about products, not weather. Only if the CUSTOMER explicitly mentions the weather, respond briefly to that. Do not repeat it later.
+- Order status: the customer only needs to give the ORDER NUMBER (or tracking number) — NO login, email or phone required. Always look it up and tell them the delivery status.
+- Order changes: only for PENDING orders. The customer must be logged in OR give the email used on the order (must match). Then change the delivery date/time or cancel it for them.
 - "recipe / ranna" → search_recipes then search_products_bulk for the ingredients ({{BULK_BUTTON}} list).
 - Cart-aware help: whenever a customer wants suggestions, "what should I cook?", or a complement, FIRST call `get_cart_contents` and build on what they already have (e.g. "chal ar dal ache — mangsho/masala add korle tehari hobe").
 Never ask "should I use a tool?" — just use it and reply naturally with the result.

@@ -86,34 +86,44 @@ class ToolExecutor
 
     private function getOrderStatus(array $args): array
     {
-        $identifier = $args['order_id_or_tracking'] ?? null;
+        $identifier = $args['order_id_or_tracking'] ?? $args['order_id'] ?? null;
+        $email = strtolower(trim((string) ($args['email'] ?? '')));
         $customer = auth('customer')->user();
         $orderModel = $this->getModelClass('order', \App\Models\Order::class);
 
         if (!$orderModel) return ['error' => 'Order lookup is not available.'];
 
-        $query = $orderModel::with(['orderItems', 'address', 'tracking', 'payments']);
-
-        if ($identifier) {
-            $query->where(function($q) use ($identifier) {
-                $q->where('id', $identifier)->orWhere('tracking_no', $identifier);
-            });
-            if ($customer) $query->where('customer_id', $customer->id);
-        } elseif ($customer) {
-            $query->where('customer_id', $customer->id)->latest();
+        if (!$identifier && $customer) {
+            // Fallback: the logged-in customer's latest order.
+            $order = $orderModel::with(['orderItems', 'address', 'tracking'])
+                ->where('customer_id', $customer->id)->latest('id')->first();
+        } elseif ($identifier) {
+            // PUBLIC: order number / tracking number is enough — no login needed.
+            $order = $orderModel::with(['orderItems', 'address', 'tracking'])
+                ->where(function ($q) use ($identifier) {
+                    $q->where('id', $identifier)->orWhere('tracking_no', $identifier);
+                })->first();
         } else {
-            return ['error' => 'Please provide an order ID or tracking number, or log in.'];
+            return ['error' => 'Please give me your order number (or tracking number).'];
         }
 
-        $order = $query->first();
         if (!$order) {
-            // Private data: the order may belong to another customer. Explain
-            // the scope instead of "not in our system" so users don't think
-            // the order vanished from the store.
-            return ['error' =>
-                'আমি শুধুমাত্র আপনার নিজের অ্যাকাউন্টের order দেখতে পারি। এই order টা আপনার অ্যাকাউন্টে পাওয়া যায়নি '
-                . '— order ID বা tracking number আবার চেক করে দিন, অথবা যে email-এ order করেছেন সেটা বলুন।'];
+            return ['error' => "এই order number টা পাইনি ভাই — order number/tracking number টা আবার ঠিক করে বলুন।"];
         }
+
+        // Who is asking?
+        $isOwner = $customer && (int) $order->customer_id === (int) $customer->id;
+        $emailMatches = false;
+        if (!$isOwner && $email !== '') {
+            try {
+                $customerModel = config('gunma-agent.models.customer');
+                if ($customerModel && class_exists($customerModel)) {
+                    $orderEmail = strtolower((string) ($customerModel::where('id', $order->customer_id)->value('email') ?? ''));
+                    $emailMatches = $orderEmail !== '' && $orderEmail === $email;
+                }
+            } catch (\Throwable) {}
+        }
+        $verified = $isOwner || $emailMatches;
 
         $timeline = [];
         if (method_exists($order, 'trackingHistories') && $order->trackingHistories) {
@@ -130,17 +140,12 @@ class ToolExecutor
             ])->toArray();
         }
 
-        $address = $order->address;
-
-        // Payment semantics: Cash-on-Delivery orders are legitimately "Unpaid"
-        // with an outstanding due_amount until the driver collects payment.
-        // The agent must NOT tell the customer their COD order has a problem.
         $isCash = in_array($order->payment_method, ['Cash', 'COD'], true);
         $paymentNote = $isCash
             ? 'Cash on Delivery: payment is collected when the order is delivered. An "Unpaid" status or a due amount is normal and NOT a problem.'
             : 'Card/online payment.';
 
-        return [
+        $out = [
             'status' => 'success',
             'order_id' => $order->id,
             'tracking_no' => $order->tracking_no,
@@ -152,7 +157,21 @@ class ToolExecutor
             'total_amount' => (float) ($order->total_amount ?? 0),
             'due_amount' => (float) ($order->due_amount ?? 0),
             'delivery_date' => $order->delivary_date ? $order->delivary_date->format('Y-m-d') : null,
-            'delivery_address' => $address ? [
+            'delivery_time' => $order->delivary_time ?? null,
+            'is_pending' => in_array(strtolower((string) $order->status), ['pending', 'onhold', 'on hold', 'processing', 'pre-order'], true),
+            'verified_owner' => $verified,
+            'items' => $order->orderItems->map(fn($item) => [
+                'name' => $item->product_title,
+                'quantity' => $item->quantity,
+                'price' => (float) ($item->unit_price ?? 0),
+            ])->toArray(),
+            'timeline' => $timeline,
+        ];
+
+        // Address/phone are PII — only reveal to the verified owner / matching email.
+        if ($verified && $order->address) {
+            $address = $order->address;
+            $out['delivery_address'] = [
                 'name' => $address->shipping_name ?: $address->billing_name,
                 'phone' => $address->shipping_phone ?: $address->billing_phone,
                 'address' => trim(implode(' ', array_filter([
@@ -162,13 +181,90 @@ class ToolExecutor
                 'post_code' => $address->shipping_postal_code ?: $address->billing_postal_code,
                 'city' => $address->shipping_city ?: $address->billing_city,
                 'state' => $address->shipping_state ?: $address->billing_state,
-            ] : null,
-            'items' => $order->orderItems->map(fn($item) => [
-                'name' => $item->product_title,
-                'quantity' => $item->quantity,
-                'price' => (float) ($item->unit_price ?? 0),
-            ])->toArray(),
-            'timeline' => $timeline,
+            ];
+        } else {
+            $out['address_hidden'] = 'Delivery address/phone is private; it is shown only to the logged-in owner or when the order email matches.';
+        }
+
+        return $out;
+    }
+
+    /**
+     * Change (reschedule) or cancel a PENDING order.
+     * Requires the logged-in owner OR the email used on the order.
+     */
+    private function updatePendingOrder(array $args): array
+    {
+        $identifier = $args['order_id_or_tracking'] ?? $args['order_id'] ?? null;
+        $email = strtolower(trim((string) ($args['email'] ?? '')));
+        $action = strtolower(trim((string) ($args['action'] ?? 'change_date')));
+        $newDate = $args['new_date'] ?? null;   // YYYY-MM-DD
+        $newTime = $args['new_time'] ?? null;   // e.g. "09:00 - 12:00"
+
+        if (!$identifier) return ['error' => 'Please give me the order number to change.'];
+
+        $orderModel = $this->getModelClass('order', \App\Models\Order::class);
+        if (!$orderModel) return ['error' => 'Order system unavailable.'];
+
+        $order = $orderModel::where(function ($q) use ($identifier) {
+            $q->where('id', $identifier)->orWhere('tracking_no', $identifier);
+        })->first();
+
+        if (!$order) return ['error' => 'এই order number টা পাইনি ভাই।'];
+
+        // Only PENDING orders are changeable.
+        $pendingStatuses = ['pending', 'onhold', 'on hold', 'processing', 'pre-order'];
+        if (!in_array(strtolower((string) $order->status), $pendingStatuses, true)) {
+            return ['error' => "এই order টার status এখন '{$order->status}' — Pending থাকা অবস্থাতেই change/cancel করা যায়। আমাদের team-কে support ticket করি?"];
+        }
+
+        // Identity: logged-in owner OR matching email.
+        $customer = auth('customer')->user();
+        $isOwner = $customer && (int) $order->customer_id === (int) $customer->id;
+        if (!$isOwner) {
+            if ($email === '') {
+                return ['error' => 'নিরাপত্তার জন্য — Please log in, অথবা যে email দিয়ে order করেছেন সেটা বলুন।'];
+            }
+            $customerModel = config('gunma-agent.models.customer');
+            $orderEmail = '';
+            if ($customerModel && class_exists($customerModel)) {
+                $orderEmail = strtolower((string) ($customerModel::where('id', $order->customer_id)->value('email') ?? ''));
+            }
+            if ($orderEmail === '' || $orderEmail !== $email) {
+                return ['error' => 'এই email টা এই order-এর সাথে মিলছে না। আপনি login করে নিলে আমি সরাসরি change করে দিতে পারব।'];
+            }
+        }
+
+        if ($action === 'cancel') {
+            $order->update(['status' => 'Cancel']);
+            return [
+                'status' => 'success',
+                'order_id' => $order->id,
+                'new_status' => 'Cancel',
+                'message' => "Order #{$order->id} cancel করা হয়েছে।",
+            ];
+        }
+
+        // change_date / change_time
+        $updates = [];
+        if ($newDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $newDate)) {
+            $updates['delivary_date'] = $newDate;
+        }
+        if ($newTime) {
+            $updates['delivary_time'] = (string) $newTime;
+        }
+        if (empty($updates)) {
+            return ['error' => 'কোন নতুন date/time পাইনি — কোন তারিখ বা সময়ে চান বলুন (যেমন 2026-10-05, 09:00 - 12:00)।'];
+        }
+
+        $order->update($updates);
+
+        return [
+            'status' => 'success',
+            'order_id' => $order->id,
+            'new_delivery_date' => $order->fresh()->delivary_date?->format('Y-m-d'),
+            'new_delivery_time' => $order->fresh()->delivary_time,
+            'message' => "Order #{$order->id} update করা হয়েছে।",
         ];
     }
 
@@ -1441,15 +1537,37 @@ class ToolExecutor
                 'type' => 'function',
                 'function' => [
                     'name' => 'get_order_status',
-                    'description' => 'Get status, payment info, items, and delivery address for an order.',
+                    'description' => 'Get delivery status for an order. The customer ONLY needs to give the order number or tracking number — NO login, email or phone required. Use this whenever someone asks "amar order kothay" / order status.',
                     'parameters' => [
                         'type' => 'object',
                         'properties' => [
                             'order_id_or_tracking' => [
                                 'type' => 'string',
-                                'description' => 'Order ID or tracking number. Empty = most recent order for logged-in user.',
+                                'description' => 'Order ID or tracking number.',
+                            ],
+                            'email' => [
+                                'type' => 'string',
+                                'description' => 'Optional. If given and it matches the order email, private info like the delivery address is shown.',
                             ],
                         ],
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'update_pending_order',
+                    'description' => 'Reschedule (change delivery date/time) or cancel a PENDING order. Requires the customer to be logged in OR to provide the email used on the order. Refuse politely if the order is not Pending.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'order_id_or_tracking' => ['type' => 'string', 'description' => 'Order ID or tracking number.'],
+                            'action' => ['type' => 'string', 'enum' => ['change_date', 'cancel'], 'description' => 'What to do. Default change_date.'],
+                            'new_date' => ['type' => 'string', 'description' => 'New delivery date YYYY-MM-DD (for change_date).'],
+                            'new_time' => ['type' => 'string', 'description' => 'New delivery time window e.g. "09:00 - 12:00" (optional).'],
+                            'email' => ['type' => 'string', 'description' => 'Email on the order (required only if not logged in).'],
+                        ],
+                        'required' => ['order_id_or_tracking'],
                     ],
                 ],
             ],

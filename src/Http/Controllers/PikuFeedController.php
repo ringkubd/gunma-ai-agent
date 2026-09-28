@@ -229,6 +229,128 @@ class PikuFeedController extends Controller
         return response()->json(['data' => $productData]);
     }
 
+
+    /**
+     * Phase 5 — typed doodle-message pool.
+     * GET /api/chat/piku-messages?session_id=&limit=8
+     * Varied intents: greet / cart_complement / cart_recovery / cart_helper /
+     * search_hook / reorder / spotlight / free_shipping / (tip). Text
+     * pre-composed in the customer's language; price/stock are LIVE. No PII.
+     */
+    public function messages(Request $request): JsonResponse
+    {
+        $limit = min(12, max(1, (int) $request->query('limit', 8)));
+        $sessionId = (string) $request->query('session_id', '');
+
+        $session = $sessionId !== '' ? ChatSession::find($sessionId) : null;
+        $customerId = $session?->customer_id ? (int) $session->customer_id : (auth('customer')->id() ?: null);
+        $visitorId = (string) ($session?->visitor_id ?? $request->header('X-Visitor-Id') ?? '');
+        $lang = $this->resolveLang($request, $customerId);
+
+        $out = [];
+        $add = function (string $type, string $text, ?array $product = null, ?array $chips = null) use (&$out) {
+            $row = ['type' => $type, 'text' => $text];
+            if ($product) $row['product'] = $product;
+            if ($chips) $row['chips'] = $chips;
+            $out[] = $row;
+        };
+
+        // 0) Greeting
+        $name = null;
+        if ($customerId) {
+            try {
+                $cm = config('gunma-agent.models.customer');
+                $name = $cm && class_exists($cm) ? ($cm::find($customerId)->name ?? null) : null;
+            } catch (\Throwable) {}
+        }
+        $greet = match ($lang) {
+            'bn' => $name ? "Apni to ribol holen {$name}! Aaj ki lagbe? 😊" : 'Aaj ki ranna korben? Bolo, ber kore de!',
+            'hi' => $name ? "नमस्ते {$name}! आज क्या बनाएंगे?" : 'नमस्ते! आज मैं क्या दिला दूँ? 💬',
+            default => $name ? "Hello {$name}! What are we cooking today? 😊" : 'Hi! What can I get for you today? 💬',
+        };
+        $add('greet', $greet);
+
+        // 1) Cart context
+        $cart = $this->cartContext($customerId);
+
+        if (! empty($cart['ids'])) {
+            $firstPid = (int) reset($cart['ids']);
+            $p = $this->productBrief($customerId, $firstPid, $lang);
+            if ($p) {
+                $chips = [
+                    ['label' => ($lang === 'bn' ? 'Recipe dao' : 'Recipe please'), 'prefill' => "{$p['title']} er recipe dao"],
+                    ['label' => ($lang === 'bn' ? 'Cart dekhao' : 'Show cart'), 'prefill' => 'amar cart dekhao'],
+                ];
+                $add('cart_complement', ($lang === 'bn' ? 'Apnar cart e ' : 'You have ') . "{$p['title']} — " . ($lang === 'bn' ? 'ewta banano jai?' : 'want to make something with it?'), $p, $chips);
+            }
+        }
+
+        // 2) Search-intent hook (recent site search -> best product)
+        $kw = $this->recentSearchKeyword($customerId, (string) ($session?->visitor_id ?? ''));
+        if ($kw) {
+            $hit = $this->searchProduct($kw);
+            if ($hit) {
+                $add('search_hook', ($lang === 'bn'
+                    ? "Apni \"{$kw}\" khuje pro ছিলেন! Ekhon stock e ache {$hit['title']} ✅"
+                    : "You were looking for \"{$kw}\" — found: {$hit['title']} ✅"), $hit, [
+                    ['label' => ($lang === 'bn' ? 'Dekhao' : 'Show it'), 'prefill' => "{$hit['title']} dekhao"]
+                ]);
+            }
+        }
+
+        // 3) Reorder (last order)
+        $reorderIds = $this->lastOrderProductIds($customerId);
+        if (! empty($reorderIds)) {
+            $pid = (int) reset($reorderIds);
+            if ($p = $this->productBrief($customerId, $pid, $lang)) {
+                $add('reorder', ($lang === 'bn' ? 'Age ei nite chilen — ' : 'Last time you loved ') . "{$p['title']} — abar nite chan? 🛒", $p, [
+                    ['label' => ($lang === 'bn' ? 'Reorder koro' : 'Reorder'), 'prefill' => "{$p['title']} cart e add koro"],
+                ]);
+            }
+        }
+
+        // 4) Free shipping nudge
+        if ($customerId) {
+            $subtotal = $this->cartSubtotal($customerId);
+            if ($subtotal >= 8000 && $subtotal < 10000) {
+                $remaining = (float) (10000 - $subtotal);
+                $msg = $lang === 'bn'
+                    ? 'Aro ¥' . number_format($remaining) . " add korle delivery FREE bhai! 💸"
+                    : "Add ¥" . number_format($remaining) . " more and delivery is FREE! 💸";
+                $add('free_shipping', $msg);
+            }
+        }
+
+        // 5) Cart recovery (stalled carts only)
+        if ($cart['stale_hours'] >= 6) {
+            $stale = (int) $cart['stale_hours'];
+            $add('cart_recovery', ($lang === 'bn'
+                ? "Apnar cart e item ache ({$stale} hours dhore!) — checkout hoy নাই! Ekhon kore niben? 💬"
+                : "Your cart has been waiting {$stale}h — let's finish checkout! 💬"));
+        } elseif (! empty($cart['ids'])) {
+            $add('cart_helper', ($lang === 'bn'
+                ? 'Choi sob item এখানে ওই বা ওটা cart e rakhkhei dilam! "Add all" bolun 💬'
+                : 'Say "add all" and I will add all to your cart at once 💬'));
+        }
+
+        // 6) Interest spotlight
+        $numSpot = max(0, $limit - count($out) - 2);
+        $spotAdded = 0;
+        foreach ($this->interestProductIds($customerId, (string) ($session?->visitor_id ?? '')) as $pid) {
+            if ($spotAdded >= max(1, $numSpot) || count($out) >= $limit) break;
+            if ($p = $this->productBrief($customerId, (int) $pid, $lang)) {
+                $spotAdded++;
+                $chips = [
+                    ['label' => ($lang === 'bn' ? 'Recipe dao' : 'Recipe please'), 'prefill' => "{$p['title']} er recipe dao"],
+                    ['label' => ($lang === 'bn' ? 'Add koro' : 'Add to cart'), 'prefill' => "{$p['title']} cart e add koro"],
+                ];
+                $add('spotlight', ($lang === 'bn' ? 'Piku মনে রাখল — ' : 'Piku picked just for you — ') . $p['text'] . ' (' . $p['price_line'] . ')', $p, $chips);
+            }
+        }
+
+        return response()->json(['data' => array_slice($out, 0, $limit), 'lang' => $lang])
+            ->header('Cache-Control', 'no-store');
+    }
     private function blurbFor(int $productId, string $lang): ?string
     {
         try {
@@ -388,4 +510,108 @@ class PikuFeedController extends Controller
             }
         }
     }
+
+    /* ── Phase-5 helpers ─────────────────────────────────────── */
+
+    private function productBrief(?int $customerId, int $pid, string $lang): ?array
+    {
+        try {
+            $productModel = config('gunma-agent.models.product', \App\Models\Product::class);
+            if (! class_exists($productModel)) return null;
+            $product = $productModel::with(['latestStock', 'images'])->find($pid);
+            if (! $product || $product->status !== 'Active') return null;
+
+            $stock = $product->latestStock;
+            $price = (float) ($stock?->online_price ?? 0);
+            $qty = (int) ($stock?->available_quantity ?? 0);
+            $inStock = $qty > 0 && ($product->stock_availability ?? 'Stock-In') !== 'Stock-Out';
+
+            return [
+                'product_id' => (int) $product->id,
+                'title'      => (string) $product->title,
+                'slug'       => (string) $product->slug,
+                'image'      => $product->images->first()?->image_path ?? null,
+                'price'      => $price,
+                'stock'      => $qty,
+                'in_stock'   => $inStock,
+                'price_line' => '¥' . number_format($price) . ($inStock ? '' : ' — stock nei'),
+                'text'       => $this->blurbFor($pid, $lang),
+            ];
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function recentSearchKeyword(?int $customerId, string $visitorId): ?string
+    {
+        try {
+            if (! DB::getSchemaBuilder()->hasTable('customer_interest_profiles')) return null;
+            $keys = [];
+            if ($customerId) $keys[] = 'customer:' . $customerId;
+            if ($visitorId !== '') $keys[] = 'visitor:' . $visitorId;
+            $row = $keys ? DB::table('customer_interest_profiles')->whereIn('profile_key', $keys)->get()->first() : null;
+            if (! $row) return null;
+            $kw = json_decode((string) ($row->top_search_keywords ?? '[]'), true);
+            if (! is_array($kw)) return null;
+            arsort($kw);
+            foreach (array_keys($kw) as $word) {
+                $w = trim((string) $word);
+                if (mb_strlen($w) > 2 && mb_strlen($w) < 40) return $w;
+            }
+        } catch (\Throwable) {}
+        return null;
+    }
+
+    private function searchProduct(string $kw): ?array
+    {
+        try {
+            $productModel = config('gunma-agent.models.product', \App\Models\Product::class);
+            if (! class_exists($productModel)) return null;
+            $product = $productModel::where('status', 'Active')
+                ->where('is_online_available', 'Yes')
+                ->where(function ($q) use ($kw) {
+                    $q->where('title', 'LIKE', "%{$kw}%")
+                      ->orWhere('description', 'LIKE', "%{$kw}%");
+                })
+                ->with(['latestStock', 'images'])
+                ->first();
+
+            if (! $product) return null;
+            $stock = $product->latestStock;
+            $qty = (int) ($stock?->available_quantity ?? 0);
+
+            return [
+                'product_id' => (int) $product->id,
+                'title'      => (string) $product->title,
+                'slug'       => (string) $product->slug,
+                'image'      => $product->images->first()?->image_path ?? null,
+                'price'      => (float) ($stock?->online_price ?? 0),
+                'stock'      => $qty,
+                'in_stock'   => $qty > 0 && ($product->stock_availability ?? 'Stock-In') !== 'Stock-Out',
+                'price_line' => '¥' . number_format((float) ($stock?->online_price ?? 0)),
+                'text'       => $this->blurbFor((int) $product->id, 'en'),
+                'text_line'  => null,
+            ];
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function cartSubtotal(?int $customerId): float
+    {
+        try {
+            $cart = config('gunma-agent.models.cart', \App\Models\Cart::class);
+            if (! $cart || ! class_exists($cart)) return 0.0;
+            return (float) ($cart::where('customer_id', $customerId)->whereNull('deleted_at')->sum('total_amount') ?? 0);
+        } catch (\Throwable) {
+            return 0.0;
+        }
+    }
+
+    private function freeShippingNear(?int $customerId): bool
+    {
+        $subtotal = $this->cartSubtotal($customerId);
+        return $subtotal >= 8000 && $subtotal < 10000;
+    }
+
 }

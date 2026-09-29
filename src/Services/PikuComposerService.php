@@ -43,6 +43,34 @@ class PikuComposerService
             return $cached;
         }
 
+        // Single-flight: if an identical compose is already in progress, wait
+        // briefly for its result instead of firing another LLM request. This
+        // keeps concurrency flat when many shoppers hit the same context.
+        $lockKey = $cacheKey . ':lock';
+        try {
+            $lock = Cache::lock($lockKey, 15);
+            if (! $lock->get()) {
+                for ($i = 0; $i < 20; $i++) {
+                    usleep(150_000); // up to ~3s
+                    $again = Cache::get($cacheKey);
+                    if (is_string($again) && $again !== '') return $again;
+                }
+                return null; // give up — caller uses pre-composed cues
+            }
+        } catch (\Throwable) {
+            $lock = null; // cache store without locks — proceed without single-flight
+        }
+
+        try {
+            return $this->generate($cacheKey, $signal, $lang, $type, $productId, $keyword, $productTitle);
+        } finally {
+            try { $lock?->release(); } catch (\Throwable) { /* ignore */ }
+        }
+    }
+
+    private function generate(string $cacheKey, array $signal, string $lang, string $type, int $productId, string $keyword, string $productTitle): ?string
+    {
+
         $cfg = $this->llmConfig();
         if ($cfg['base_url'] === '' || $cfg['model'] === '') {
             return null;

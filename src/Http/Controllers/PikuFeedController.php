@@ -248,12 +248,17 @@ class PikuFeedController extends Controller
         $lang = $this->resolveLang($request, $customerId);
 
         $out = [];
-        $add = function (string $type, string $text, ?array $product = null, ?array $chips = null) use (&$out) {
+        $add = function (string $type, string $text, ?array $product = null, ?array $chips = null, ?int $weight = null, ?int $cooldownMs = null) use (&$out) {
             $row = ['type' => $type, 'text' => $text];
             if ($product) $row['product'] = $product;
             if ($chips) $row['chips'] = $chips;
+            if ($weight !== null) $row['weight'] = $weight;
+            if ($cooldownMs !== null) $row['cooldownMs'] = $cooldownMs;
             $out[] = $row;
         };
+
+        $mode = (string) $request->query('mode', 'classic'); // 'activity' from the smart brain
+        $activityMode = $mode === 'activity';
 
         // 0) Greeting
         $name = null;
@@ -295,7 +300,7 @@ class PikuFeedController extends Controller
                     ? "Apni \"{$kw}\" khuje pro ছিলেন! Ekhon stock e ache {$hit['title']} ✅"
                     : "You were looking for \"{$kw}\" — found: {$hit['title']} ✅"), $hit, [
                     ['label' => ($lang === 'bn' ? 'Dekhao' : 'Show it'), 'prefill' => "{$hit['title']} dekhao"]
-                ]);
+                ], 90, 6000);
             }
         }
 
@@ -306,7 +311,7 @@ class PikuFeedController extends Controller
             if ($p = $this->productBrief($customerId, $pid, $lang)) {
                 $add('reorder', ($lang === 'bn' ? 'Age ei nite chilen — ' : 'Last time you loved ') . "{$p['title']} — abar nite chan? 🛒", $p, [
                     ['label' => ($lang === 'bn' ? 'Reorder koro' : 'Reorder'), 'prefill' => "{$p['title']} cart e add koro"],
-                ]);
+                ], 75, 90000);
             }
         }
 
@@ -318,7 +323,7 @@ class PikuFeedController extends Controller
                 $msg = $lang === 'bn'
                     ? 'Aro ¥' . number_format($remaining) . " add korle delivery FREE bhai! 💸"
                     : "Add ¥" . number_format($remaining) . " more and delivery is FREE! 💸";
-                $add('free_shipping', $msg);
+                $add('free_shipping', $msg, null, null, 80, 60000);
             }
         }
 
@@ -347,7 +352,7 @@ class PikuFeedController extends Controller
                     ['label' => ($lang === 'bn' ? 'Recipe dao' : 'Recipe please'), 'prefill' => "{$p['title']} er recipe dao"],
                     ['label' => ($lang === 'bn' ? 'Add koro' : 'Add to cart'), 'prefill' => "{$p['title']} cart e add koro"],
                 ];
-                $add('spotlight', ($lang === 'bn' ? 'Piku মনে রাখল — ' : 'Piku picked just for you — ') . $p['text'] . ' (' . $p['price_line'] . ')', $p, $chips);
+                $add('spotlight', ($lang === 'bn' ? 'Piku মনে রাখল — ' : 'Piku picked just for you — ') . $p['text'] . ' (' . $p['price_line'] . ')', $p, $chips, 60, 45000);
             }
         }
 
@@ -356,7 +361,7 @@ class PikuFeedController extends Controller
             try {
                 $pm = config('gunma-agent.models.product', \App\Models\Product::class);
                 $pids = $pm::where('status', 'Active')->where('is_online_available', 'Yes')
-                    ->inRandomOrder()->limit(max(0, 3 - count($out)))->pluck('id')->all();
+                    ->inRandomOrder()->limit(max(2, 5 - count($out)))->pluck('id')->all();
             } catch (\Throwable) { $pids = []; }
             foreach ($pids as $pid) {
                 if (count($out) >= $limit) break;
@@ -365,13 +370,95 @@ class PikuFeedController extends Controller
                         ['label' => ($lang === 'bn' ? 'Recipe dao' : 'Recipe please'), 'prefill' => "{$p['title']} er recipe dao"],
                         ['label' => ($lang === 'bn' ? 'Add koro' : 'Add to cart'), 'prefill' => "{$p['title']} cart e add koro"],
                     ];
-                    $add('spotlight', ($lang === 'bn' ? 'Ajker special — ' : "Today's pick — ") . $p['title'] . ' (' . $p['price_line'] . ')', $p, $chips);
+                    $add('spotlight', ($lang === 'bn' ? 'Ajker special — ' : "Today's pick — ") . $p['title'] . ' (' . $p['price_line'] . ')', $p, $chips, 50, 45000);
                 }
             }
         }
 
-        return response()->json(['data' => array_slice($out, 0, $limit), 'lang' => $lang])
+        // 8) Generic tips (activity mode only) — keep Piku alive without nagging.
+        if ($activityMode) {
+            foreach ($this->genericTips($lang) as $i => $tip) {
+                if (count($out) >= $limit) break;
+                $add('tip', $tip, null, null, 30, 35000);
+            }
+            // 9) Seasonal / time-based opener (existing ProactiveTriggerService)
+            if (count($out) < $limit) {
+                try {
+                    $triggers = app(\Anwar\GunmaAgent\Services\ProactiveTriggerService::class)->getTriggers();
+                    $season = (string) ($triggers['season'] ?? '');
+                    if ($season !== '' && in_array($season, ['ramadan', 'eid', 'winter', 'summer', 'rainy'], true)) {
+                        $seasonLines = [
+                            'bn' => "{$season} season er special ready — ki lagbe bolen! 🍽️",
+                            'hi' => "{$season} सीज़न का स्पेशल तैयार है — बताइए क्या चाहिए! 🍽️",
+                            'en' => ucfirst($season) . " season specials are ready — tell me what you need! 🍽️",
+                        ];
+                        $add('season_time', $seasonLines[$lang] ?? $seasonLines['en'], null, null, 40, 120000);
+                    }
+                } catch (\Throwable) { /* never block the feed */ }
+            }
+        }
+
+        return response()->json(['data' => array_slice($out, 0, $limit), 'lang' => $lang, 'mode' => $mode])
             ->header('Cache-Control', 'no-store');
+    }
+
+    /**
+     * POST /api/chat/piku-compose
+     *
+     * Body: { signal: {...}, context: {...}, lang: 'bn' }
+     * Returns { text, lang }. Best-quality contextual one-liner for the smart
+     * Piku. Falls back to { text: null } so the widget uses pre-composed cues.
+     */
+    public function compose(Request $request): JsonResponse
+    {
+        $signal = (array) $request->input('signal', []);
+        $context = (array) $request->input('context', []);
+        $bodyLang = strtolower((string) $request->input('lang', ''));
+        $lang = in_array($bodyLang, self::LANGS, true)
+            ? $bodyLang
+            : $this->resolveLang($request, auth('customer')->id() ?: null);
+
+        // Merge the caller context over the signal for a richer prompt.
+        $merged = array_merge($signal, $context);
+        $merged['type'] = (string) ($signal['type'] ?? 'tip');
+
+        try {
+            $text = app(\Anwar\GunmaAgent\Services\PikuComposerService::class)->compose($merged, $lang);
+        } catch (\Throwable $e) {
+            $text = null;
+        }
+
+        return response()->json(['text' => $text, 'lang' => $lang])
+            ->header('Cache-Control', 'no-store');
+    }
+
+    /** Language-matched generic tips for the activity brain (non-nagging). */
+    private function genericTips(string $lang): array
+    {
+        $tips = [
+            'bn' => [
+                'Aj ker fresh stock eshe geche — dekhe nin! 🥬',
+                'Recipe lagle bolo, ami step-by-step diye debo 🍳',
+                'Cart e add korle ami ingredients o miley debo ✅',
+                'Kon ta banate chan ajke? Bolo, help korbo 😊',
+                'Free delivery pete ¥10,000 porjonto pohonchan — ektu baki! 💸',
+            ],
+            'hi' => [
+                'आज ताज़ा स्टॉक आ गया है — देख लीजिए! 🥬',
+                'रेसिपी चाहिए तो बताइए, स्टेप-बाय-स्टेप दूँगी 🍳',
+                'कार्ट में जोड़ें, मैं सामग्री भी मिला दूँगी ✅',
+            ],
+            'en' => [
+                'Fresh stock just landed — take a look! 🥬',
+                'Need a recipe? Say the word and I will give it step-by-step 🍳',
+                'Add it to cart and I can sort the ingredients too ✅',
+                'What are we cooking today? I am happy to help 😊',
+            ],
+        ];
+
+        $list = $tips[$lang] ?? $tips['en'];
+        shuffle($list);
+        return $list;
     }
     private function blurbFor(int $productId, string $lang): ?string
     {

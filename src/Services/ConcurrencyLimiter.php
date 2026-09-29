@@ -44,6 +44,57 @@ class ConcurrencyLimiter
     }
 
     /**
+     * Try to acquire a slot without waiting. Returns false immediately when
+     * the LLM is saturated — used by best-effort paths (e.g. the doodle
+     * composer) that must never tie up an FPM worker waiting for capacity.
+     */
+    public function tryAcquire(): bool
+    {
+        if ($this->maxConcurrency <= 0) {
+            return true; // limiter disabled
+        }
+
+        try {
+            $current = (int) Cache::get(self::KEY, 0);
+            if ($current >= $this->maxConcurrency) {
+                return false;
+            }
+            $new = Cache::increment(self::KEY, 1);
+            if ($new === false) {
+                Cache::put(self::KEY, $current + 1, $this->slotTtl);
+                $new = $current + 1;
+            }
+            if ($new <= 1) {
+                Cache::put(self::KEY, $new, $this->slotTtl);
+            }
+            if ($new <= $this->maxConcurrency) {
+                return true;
+            }
+            $this->release(); // lost the race
+            return false;
+        } catch (\Throwable $e) {
+            // Limiter unavailable → allow the call rather than block.
+            return true;
+        }
+    }
+
+    /**
+     * Run $fn only if a slot is immediately available; otherwise return
+     * $fallback without blocking. Ideal for optional/background LLM work.
+     */
+    public function runBestEffort(callable $fn, mixed $fallback = null): mixed
+    {
+        if (! $this->tryAcquire()) {
+            return $fallback;
+        }
+        try {
+            return $fn();
+        } finally {
+            $this->release();
+        }
+    }
+
+    /**
      * Try to acquire a slot, waiting up to waitSeconds. Returns true on success.
      */
     public function acquire(): bool

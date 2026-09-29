@@ -44,9 +44,9 @@ Route::prefix($prefix)
         Route::get('/piku-suggestions', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'suggestions'])
             ->middleware('throttle:30,1');
         Route::get('/piku-messages', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'messages'])
-            ->middleware('throttle:20,1');
+            ->middleware('throttle:120,1');
         Route::post('/piku-compose', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'compose'])
-            ->middleware('throttle:30,1');
+            ->middleware('throttle:60,1');
         Route::post('/cart/bulk', [ChatController::class, 'bulkAddToCart']);
     });
 

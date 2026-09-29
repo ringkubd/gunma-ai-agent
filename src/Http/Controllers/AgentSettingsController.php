@@ -187,14 +187,16 @@ class AgentSettingsController extends Controller
      */
     public function publicFeatures(): JsonResponse
     {
-        return response()->json([
-            'doodle' => [
-                'enabled' => $this->settings->bool('doodle_enabled', true),
-            ],
-            'widget' => [
-                'enabled' => $this->settings->bool('widget_enabled', true),
-            ],
-        ])->header('Cache-Control', 'no-cache');
+        // Tiny, identical for everyone → cache 30s so 1000 concurrent page
+        // loads don't each read agent_settings from the DB.
+        $flags = \Illuminate\Support\Facades\Cache::remember('piku_public_features', now()->addSeconds(30), function () {
+            return [
+                'doodle' => ['enabled' => $this->settings->bool('doodle_enabled', true)],
+                'widget' => ['enabled' => $this->settings->bool('widget_enabled', true)],
+            ];
+        });
+
+        return response()->json($flags)->header('Cache-Control', 'public, max-age=30');
     }
 
     /**

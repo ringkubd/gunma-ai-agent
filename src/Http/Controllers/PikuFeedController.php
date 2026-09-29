@@ -246,6 +246,21 @@ class PikuFeedController extends Controller
         $customerId = $session?->customer_id ? (int) $session->customer_id : (auth('customer')->id() ?: null);
         $visitorId = (string) ($session?->visitor_id ?? $request->header('X-Visitor-Id') ?? '');
         $lang = $this->resolveLang($request, $customerId);
+        $mode = (string) $request->query('mode', 'classic'); // 'activity' from the smart brain
+
+        // ── Anonymous traffic collapse ──────────────────────────────────
+        // With no customer and no visitor context the pool is identical for
+        // every guest, so cache it briefly in Redis. At 1000 concurrent
+        // visitors this turns thousands of DB-heavy builds into ~1/minute.
+        $cacheable = $customerId === null && $visitorId === '';
+        $cacheKey = "piku_pool:{$lang}:{$mode}:{$limit}";
+        if ($cacheable) {
+            $hit = \Illuminate\Support\Facades\Cache::get($cacheKey);
+            if (is_array($hit)) {
+                return response()->json(['data' => $hit, 'lang' => $lang, 'mode' => $mode])
+                    ->header('Cache-Control', 'public, max-age=60');
+            }
+        }
 
         $out = [];
         $add = function (string $type, string $text, ?array $product = null, ?array $chips = null, ?int $weight = null, ?int $cooldownMs = null) use (&$out) {
@@ -257,7 +272,6 @@ class PikuFeedController extends Controller
             $out[] = $row;
         };
 
-        $mode = (string) $request->query('mode', 'classic'); // 'activity' from the smart brain
         $activityMode = $mode === 'activity';
 
         // 0) Greeting
@@ -398,7 +412,16 @@ class PikuFeedController extends Controller
             }
         }
 
-        return response()->json(['data' => array_slice($out, 0, $limit), 'lang' => $lang, 'mode' => $mode])
+        $payload = array_slice($out, 0, $limit);
+        if ($cacheable && ! empty($payload)) {
+            try {
+                \Illuminate\Support\Facades\Cache::put($cacheKey, $payload, now()->addSeconds(60));
+            } catch (\Throwable) { /* cache best-effort */ }
+            return response()->json(['data' => $payload, 'lang' => $lang, 'mode' => $mode])
+                ->header('Cache-Control', 'public, max-age=60');
+        }
+
+        return response()->json(['data' => $payload, 'lang' => $lang, 'mode' => $mode])
             ->header('Cache-Control', 'no-store');
     }
 
@@ -605,6 +628,20 @@ class PikuFeedController extends Controller
 
     private function trendingProductIds(int $limit): array
     {
+        // Best-seller aggregation is expensive and identical for everyone —
+        // cache it in Redis for 5 minutes.
+        try {
+            return \Illuminate\Support\Facades\Cache::remember("piku_trending:{$limit}", now()->addMinutes(5), function () use ($limit) {
+                return $this->computeTrending($limit);
+            });
+        } catch (\Throwable) {
+            return $this->computeTrending($limit);
+        }
+    }
+
+    /** @return array<int,int> */
+    private function computeTrending(int $limit): array
+    {
         try {
             $ids = DB::table('order_items')
                 ->select('product_id', DB::raw('COUNT(*) c'))
@@ -634,18 +671,33 @@ class PikuFeedController extends Controller
 
     private function productBrief(?int $customerId, int $pid, string $lang): ?array
     {
+        // Product core (title/slug/image/price/stock) is identical for every
+        // shopper — cache per (pid, lang) in Redis for 90s. This is the single
+        // biggest DB saving at 1000 concurrent users: thousands of per-user
+        // productBrief queries collapse to a handful of cached rows.
+        $key = "piku_brief:{$pid}:{$lang}";
+        try {
+            $hit = \Illuminate\Support\Facades\Cache::get($key);
+            if (is_array($hit)) return $hit === [] ? null : $hit;
+        } catch (\Throwable) { /* cache best-effort */ }
+
         try {
             $productModel = config('gunma-agent.models.product', \App\Models\Product::class);
             if (! class_exists($productModel)) return null;
-            $product = $productModel::with(['latestStock', 'images'])->find($pid);
-            if (! $product || $product->status !== 'Active') return null;
+            $product = str_contains($productModel, '\\') && method_exists($productModel, 'with')
+                ? $productModel::with(['latestStock', 'images'])->find($pid)
+                : $productModel::find($pid);
+            if (! $product || $product->status !== 'Active') {
+                try { \Illuminate\Support\Facades\Cache::put($key, [], now()->addSeconds(60)); } catch (\Throwable) {}
+                return null;
+            }
 
             $stock = $product->latestStock;
             $price = (float) ($stock?->online_price ?? 0);
             $qty = (int) ($stock?->available_quantity ?? 0);
             $inStock = $qty > 0 && ($product->stock_availability ?? 'Stock-In') !== 'Stock-Out';
 
-            return [
+            $brief = [
                 'product_id' => (int) $product->id,
                 'title'      => (string) $product->title,
                 'slug'       => (string) $product->slug,
@@ -656,6 +708,8 @@ class PikuFeedController extends Controller
                 'price_line' => '¥' . number_format($price) . ($inStock ? '' : ' — stock nei'),
                 'text'       => $this->blurbFor($pid, $lang),
             ];
+            try { \Illuminate\Support\Facades\Cache::put($key, $brief, now()->addSeconds(90)); } catch (\Throwable) {}
+            return $brief;
         } catch (\Throwable) {
             return null;
         }

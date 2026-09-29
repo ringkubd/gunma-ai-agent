@@ -96,8 +96,8 @@ class PikuComposerService
 
         try {
             $limiter = app(ConcurrencyLimiter::class);
-            $res = $limiter->run(function () use ($cfg, $system, $user) {
-                $req = Http::timeout(18)->acceptJson();
+            $res = $limiter->runBestEffort(function () use ($cfg, $system, $user) {
+                $req = Http::timeout(8)->acceptJson();
                 if ($cfg['api_key'] !== '') $req = $req->withToken($cfg['api_key']);
                 return $req->post($cfg['base_url'] . '/chat/completions', [
                     'model' => $cfg['model'],
@@ -111,7 +111,13 @@ class PikuComposerService
                     // leave `content` empty; disable it for these tiny lines.
                     'reasoning_effort' => 'none',
                 ]);
-            });
+            }, null);
+
+            // No slot (LLM saturated) → return null immediately so the widget
+            // uses a pre-composed cue instead of blocking this FPM worker.
+            if ($res === null) {
+                return null;
+            }
         } catch (\Throwable $e) {
             Log::debug('[PikuComposer] request failed', ['error' => $e->getMessage()]);
             return null;

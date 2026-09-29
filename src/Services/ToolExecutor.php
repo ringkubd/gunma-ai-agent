@@ -9,6 +9,12 @@ use Illuminate\Support\Facades\Log;
 
 class ToolExecutor
 {
+    /**
+     * Order statuses that are NOT real orders and must never be shown as a
+     * customer's order/pending order: abandoned or failed checkouts.
+     */
+    public const NON_ORDER_STATUSES = ['Payment Failed', 'Payment Pending'];
+
     public function __construct(
         private readonly QdrantService $qdrantService,
     ) {}
@@ -94,9 +100,13 @@ class ToolExecutor
         if (!$orderModel) return ['error' => 'Order lookup is not available.'];
 
         if (!$identifier && $customer) {
-            // Fallback: the logged-in customer's latest order.
+            // Fallback: the logged-in customer's latest REAL order. Failed or
+            // pending-payment checkouts are not "orders" — skip them so we
+            // never show an abandoned payment as the customer's latest order.
             $order = $orderModel::with(['orderItems', 'address', 'tracking'])
-                ->where('customer_id', $customer->id)->latest('id')->first();
+                ->where('customer_id', $customer->id)
+                ->whereNotIn('status', self::NON_ORDER_STATUSES)
+                ->latest('id')->first();
         } elseif ($identifier) {
             // PUBLIC: order number / tracking number is enough — no login needed.
             $order = $orderModel::with(['orderItems', 'address', 'tracking'])
@@ -159,6 +169,7 @@ class ToolExecutor
             'delivery_date' => $order->delivary_date ? $order->delivary_date->format('Y-m-d') : null,
             'delivery_time' => $order->delivary_time ?? null,
             'is_pending' => in_array(strtolower((string) $order->status), ['pending', 'onhold', 'on hold', 'processing', 'pre-order'], true),
+            'is_payment_failed' => in_array((string) $order->status, self::NON_ORDER_STATUSES, true),
             'verified_owner' => $verified,
             'items' => $order->orderItems->map(fn($item) => [
                 'name' => $item->product_title,
@@ -307,7 +318,9 @@ class ToolExecutor
 
         $orderModel = $this->getModelClass('order', \App\Models\Order::class);
         $recentOrders = $orderModel
-            ? $customer->orders()->latest()->take(5)->get()->map(fn($o) => [
+            ? $orderModel::where('customer_id', $customer->id)
+                ->whereNotIn('status', self::NON_ORDER_STATUSES)
+                ->latest()->take(5)->get()->map(fn($o) => [
                 'id' => $o->id,
                 'tracking_no' => $o->tracking_no,
                 'status' => $o->status,

@@ -491,8 +491,13 @@ class AgentOrchestrator
             }
         }
 
-        // 3. Recent orders — max 3, compact
-        foreach (array_slice($profile['orders'] ?? [], 0, 3) as $o) {
+        // 3. Recent orders — max 3, compact. Skip abandoned/failed checkouts
+        //    (Payment Failed / Payment Pending are not real orders).
+        $realOrders = array_filter(
+            $profile['orders'] ?? [],
+            fn ($o) => ! in_array((string) ($o['status'] ?? ''), \Anwar\GunmaAgent\Services\ToolExecutor::NON_ORDER_STATUSES, true)
+        );
+        foreach (array_slice($realOrders, 0, 3) as $o) {
             $lines[] = "- Order #{$o['id']}: {$o['status']} / {$o['payment_status']} — ¥" . number_format((float) $o['total_amount']) . ($o['delivery_date'] ? ", delivery {$o['delivery_date']}" : '');
         }
         $m = $profile['metrics'] ?? [];

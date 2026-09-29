@@ -103,6 +103,7 @@ class CustomerProfileService
             }
 
             return $orderModel::where('customer_id', $customerId)
+                ->whereNotIn('status', ['Payment Failed', 'Payment Pending'])
                 ->latest()
                 ->limit(15)
                 ->get()

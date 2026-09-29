@@ -47,6 +47,8 @@ Route::prefix($prefix)
             ->middleware('throttle:120,1');
         Route::post('/piku-compose', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'compose'])
             ->middleware('throttle:60,1');
+        Route::post('/piku-events', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'events'])
+            ->middleware('throttle:120,1');
         Route::post('/cart/bulk', [ChatController::class, 'bulkAddToCart']);
     });
 
@@ -95,6 +97,7 @@ Route::prefix(config('gunma-agent.admin_route_prefix', 'api/admin/chat'))
         Route::put('/settings/doodle', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'updateDoodle']);
         Route::get('/settings/widget', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'widget']);
         Route::get('/piku-coverage', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'coverage']);
+        Route::get('/piku-analytics', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'analytics']);
         Route::put('/settings/widget', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'updateWidget']);
         Route::post('/reindex', [\Anwar\GunmaAgent\Http\Controllers\AgentSettingsController::class, 'reindex']);
     });

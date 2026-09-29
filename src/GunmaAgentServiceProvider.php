@@ -61,6 +61,8 @@ class GunmaAgentServiceProvider extends ServiceProvider
 
         $this->app->singleton(\Anwar\GunmaAgent\Services\PikuComposerService::class);
 
+        $this->app->singleton(\Anwar\GunmaAgent\Services\PikuAnalytics::class);
+
         $this->app->singleton(ToolExecutor::class, function ($app) {
             return new ToolExecutor(
                 qdrantService: $app->make(QdrantService::class),

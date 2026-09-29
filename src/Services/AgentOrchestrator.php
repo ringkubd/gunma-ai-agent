@@ -1041,6 +1041,18 @@ TXT;
 
                         $result = $this->toolExecutor->execute($fnName, $fnArgs);
 
+                        // Analytics: record what Piku actually did (best-effort).
+                        try {
+                            app(\Anwar\GunmaAgent\Services\PikuAnalytics::class)->log('tool_call', [
+                                'session_id'  => $session->id,
+                                'customer_id' => $session->customer_id ? (int) $session->customer_id : null,
+                                'visitor_id'  => $session->visitor_id ?? null,
+                                'tool'        => $fnName,
+                                'product_id'  => is_array($result) ? ($result['product_id'] ?? null) : null,
+                                'order_id'    => is_array($result) ? ($result['order_id'] ?? null) : null,
+                            ], ['status' => is_array($result) ? ($result['status'] ?? null) : null]);
+                        } catch (\Throwable) { /* never block chat */ }
+
                         $messages[] = [
                             'tool_call_id' => $toolCall['id'],
                             'role' => 'tool',

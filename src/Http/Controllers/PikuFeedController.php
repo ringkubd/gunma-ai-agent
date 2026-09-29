@@ -148,6 +148,14 @@ class PikuFeedController extends Controller
 
     /* ── Admin: Phase-2 coverage panel (Piku Monitor) ─────────────── */
 
+    /** GET /api/admin/chat/piku-analytics?days=7 — business impact of Piku. */
+    public function analytics(Request $request): JsonResponse
+    {
+        $days = (int) $request->query('days', 7);
+        $data = app(\Anwar\GunmaAgent\Services\PikuAnalytics::class)->summary($days);
+        return response()->json(['data' => $data])->header('Cache-Control', 'no-store');
+    }
+
     /** GET /api/admin/chat/piku-coverage */
     public function coverage(): JsonResponse
     {
@@ -413,6 +421,17 @@ class PikuFeedController extends Controller
         }
 
         $payload = array_slice($out, 0, $limit);
+        // Attribute the doodle pool serving to this session/visitor (one row
+        // per fetch, so "Piku reached N visitors" is measurable).
+        try {
+            app(\Anwar\GunmaAgent\Services\PikuAnalytics::class)->log('doodle_message', [
+                'session_id'  => $sessionId ?: null,
+                'customer_id' => $customerId,
+                'visitor_id'  => $visitorId ?: null,
+                'lang'        => $lang,
+            ], ['mode' => $mode, 'count' => count($payload)]);
+        } catch (\Throwable) { /* never block */ }
+
         if ($cacheable && ! empty($payload)) {
             try {
                 \Illuminate\Support\Facades\Cache::put($cacheKey, $payload, now()->addSeconds(60));
@@ -451,8 +470,39 @@ class PikuFeedController extends Controller
             $text = null;
         }
 
+        if (is_string($text) && $text !== '') {
+            try {
+                app(\Anwar\GunmaAgent\Services\PikuAnalytics::class)->log('compose', [
+                    'session_id' => $request->input('session_id'),
+                    'visitor_id' => $request->header('X-Visitor-Id'),
+                    'product_id' => isset($merged['product_id']) ? (int) $merged['product_id'] : null,
+                    'lang'       => $lang,
+                ], ['signal' => $merged['type']]);
+            } catch (\Throwable) { /* never block */ }
+        }
+
         return response()->json(['text' => $text, 'lang' => $lang])
             ->header('Cache-Control', 'no-store');
+    }
+
+    /**
+     * POST /api/chat/piku-events
+     *
+     * Widget-side analytics ingest (doodle_message, chat_opened, chip_click,
+     * product_focus, checkout_opened, login_opened). Best-effort, throttled.
+     */
+    public function events(Request $request): JsonResponse
+    {
+        $event = (string) $request->input('event', '');
+        $payload = (array) $request->input('data', []);
+        $meta = (array) $request->input('meta', []);
+
+        $ok = app(\Anwar\GunmaAgent\Services\PikuAnalytics::class)->log($event, array_merge($payload, [
+            'session_id' => $request->input('session_id') ?? ($payload['session_id'] ?? null),
+            'visitor_id' => $payload['visitor_id'] ?? $request->header('X-Visitor-Id'),
+        ]), $meta);
+
+        return response()->json(['ok' => $ok])->header('Cache-Control', 'no-store');
     }
 
     /** Language-matched generic tips for the activity brain (non-nagging). */

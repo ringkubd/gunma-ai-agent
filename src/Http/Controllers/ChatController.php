@@ -685,6 +685,9 @@ class ChatController extends Controller
             'success' => true,
             'added_count' => count($results),
             'message' => 'Products added to cart successfully.',
+            // Widget stores this and re-sends it next time — guest carts stay
+            // visible across requests (Set-Cookie alone is ignored incognito).
+            'guest_cookie' => $customerId ? null : $encryptedCookie,
         ]);
 
         // Persist the guest cookie so the next storefront request sees the cart.

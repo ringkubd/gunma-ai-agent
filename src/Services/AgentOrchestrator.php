@@ -1072,14 +1072,22 @@ TXT;
         $savedMessage = $this->persistMessages($session, $userMessage, $finalContent, $usedModel ?? $primary['model'], $totalTokens);
         yield $this->sseEvent('message', ['id' => $savedMessage->id, 'content' => $finalContent]);
 
-        $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent, $session->customer_id ? (int) $session->customer_id : null);
-        $this->storeConversationSummary($session, $userMessage, $finalContent);
-        // Never cache replies that triggered a UI action tool (they must re-run).
-        if (! $usedActionTool && $finalContent !== "I'm sorry, I encountered an error. How else can I help you?" && $this->shouldUseSemanticCache($session, $userMessage)) {
-            $this->qdrantService->setSemanticCache($userMessage, $finalContent);
-        }
-
+        // Post-processing must NEVER delay or drop the 'done' event — a slow
+        // Qdrant call would keep the widget's input locked until the stream
+        // times out. Deliver 'done' FIRST; housekeeping runs in best-effort
+        // try/catch while the client is already moving on.
         yield $this->sseEvent('done', ['tokens' => $totalTokens]);
+
+        try {
+            $this->qdrantService->indexMemory($session->id, $userMessage, $finalContent, $session->customer_id ? (int) $session->customer_id : null);
+            $this->storeConversationSummary($session, $userMessage, $finalContent);
+            // Never cache replies that triggered a UI action tool (they must re-run).
+            if (! $usedActionTool && $finalContent !== "I'm sorry, I encountered an error. How else can I help you?" && $this->shouldUseSemanticCache($session, $userMessage)) {
+                $this->qdrantService->setSemanticCache($userMessage, $finalContent);
+            }
+        } catch (\Throwable) {
+            Log::warning('[Agent] post-stream housekeeping failed', ['session' => $session->id]);
+        }
     }
 
     /* ── Inject similar past conversations as context ─────────── */

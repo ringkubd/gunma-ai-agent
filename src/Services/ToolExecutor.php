@@ -442,8 +442,7 @@ class ToolExecutor
         return [
             'status' => 'success',
             'message' => "Added {$quantity}x {$product->title} to cart.",
-            'action' => 'open_checkout',
-            'url' => config('gunma-agent.website_url') . '/checkout',
+            'added_to_cart' => true,
         ];
     }
 
@@ -538,8 +537,7 @@ class ToolExecutor
             'added' => $added,
             'skipped' => $skipped,
             'errors' => $errors,
-            'action' => 'open_checkout',
-            'cart_url' => config('gunma-agent.website_url') . '/checkout',
+            'added_to_cart' => true,
         ];
     }
 

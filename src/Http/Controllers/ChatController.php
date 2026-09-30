@@ -761,6 +761,15 @@ class ChatController extends Controller
         }
 
         $authCustomerId = auth()->id();
+        if (! $authCustomerId) {
+            try { $authCustomerId = auth('customer')->id(); } catch (\Throwable) {}
+        }
+        // The customer guard may be the configured auth guard (ResolveCustomer).
+        if (! $authCustomerId) {
+            foreach (config('gunma-agent.auth_guards', ['customer', 'sanctum', 'web']) as $g) {
+                try { if (auth()->guard($g)->check()) { $authCustomerId = auth()->guard($g)->id(); break; } } catch (\Throwable) {}
+            }
+        }
         if (! $isStaff && (int) $authCustomerId !== (int) $request->customer_id) {
             abort(403, 'You can only link sessions to your own account.');
         }

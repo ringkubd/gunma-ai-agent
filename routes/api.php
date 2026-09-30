@@ -50,6 +50,10 @@ Route::prefix($prefix)
         Route::post('/piku-events', [\Anwar\GunmaAgent\Http\Controllers\PikuFeedController::class, 'events'])
             ->middleware('throttle:120,1');
         Route::post('/cart/bulk', [ChatController::class, 'bulkAddToCart']);
+        // Link a guest chat session to the now-authenticated customer (called
+        // by the widget right after an in-chat login). ResolveCustomer has
+        // already resolved the customer from the Bearer token.
+        Route::post('/link-session', [ChatController::class, 'linkSession']);
     });
 
 // Admin Dashboard & Monitoring

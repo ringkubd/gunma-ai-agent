@@ -33,6 +33,21 @@ class ChatMessage extends Model
 
     protected $touches = ['session'];
 
+    protected $appends = ['author', 'agent_name'];
+
+    /** 'human' for manual agent replies, else 'ai' (Piku). */
+    public function getAuthorAttribute(): string
+    {
+        return $this->model === 'manual'
+            ? 'human'
+            : (($this->metadata['author'] ?? 'ai') === 'human' ? 'human' : 'ai');
+    }
+
+    public function getAgentNameAttribute(): ?string
+    {
+        return $this->metadata['agent_name'] ?? null;
+    }
+
     /* ── Relationships ─────────────────────────────────────────── */
 
     public function session(): BelongsTo

@@ -460,11 +460,21 @@ class ChatController extends Controller
         $session = ChatSession::findOrFail($sessionId);
         $content = $request->input('message');
 
+        // A manual reply is from a HUMAN agent, not Piku. Store it as an
+        // assistant turn but tag the author so the widget can show the human's
+        // name/avatar instead of the AI bot.
+        $agentName = null;
+        try {
+            $u = auth()->user() ?? auth('web')->user();
+            $agentName = $u?->first_name ?? $u?->name ?? null;
+        } catch (\Throwable) {}
+
         $message = ChatMessage::create([
             'session_id' => $session->id,
             'role'       => 'assistant',
             'content'    => $content,
             'model'      => 'manual',
+            'metadata'   => ['author' => 'human', 'agent_name' => $agentName],
         ]);
 
         // Broadcast to user and admin dashboard

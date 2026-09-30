@@ -37,6 +37,10 @@ class MessageBroadcasted implements ShouldBroadcastNow
             'role'       => $this->message->role,
             'content'    => $this->message->content,
             'created_at' => $this->message->created_at->toIso8601String(),
+            'author'     => $this->message->model === 'manual'
+                ? 'human'
+                : (($this->message->metadata['author'] ?? 'ai')),
+            'agent_name' => $this->message->metadata['agent_name'] ?? null,
         ];
     }
 

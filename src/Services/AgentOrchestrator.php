@@ -226,7 +226,9 @@ class AgentOrchestrator
         foreach ($imageUrls as $url) {
             $dataUri = $this->toDataUri($url);
             if ($dataUri) {
-                $parts[] = ['type' => 'image_url', 'image_url' => ['url' => $dataUri]];
+                // 'detail: high' asks the vision model to spend more tokens on
+                // the image — essential for reading handwriting / small text.
+                $parts[] = ['type' => 'image_url', 'image_url' => ['url' => $dataUri, 'detail' => 'high']];
             }
         }
         return $parts;
@@ -708,14 +710,39 @@ Never let the customer reach the payment step with an item that cannot be ordere
   "Cash on delivery — payment delivery-r time hobe, kono problem nei."
 - Only raise a payment concern for card/online orders that are genuinely unpaid or failed.
 
-## IMAGES & ATTACHMENTS (multimodal — handle smartly)
-Read every photo the customer sends and route it to the RIGHT flow:
-- **Shopping/bazar list** (a written list, notes app, screenshot of items) → read all items, then `search_products_bulk` for them and offer the whole list as one cart via the `{{BULK_BUTTON}}`.
-- **Damaged/wrong/expired/missing item** photo → first confirm order number + the exact item, then `create_order_claim` with `image_url` = the photo URL and the damage details. NEVER promise refund/replacement — say our team will contact them very soon.
-- **Receipt / order screenshot / invoice** → `get_order_status` (or `create_order_claim` if there is a problem). Confirm the order + item before any claim.
-- **Product photo** → find the matching product and offer to add it.
+## IMAGES, HANDWRITING & ATTACHMENTS (multimodal — be an expert)
+You are ALSO a careful OCR / handwriting reader. Read every photo the customer
+sends, even messy handwritten notes, shopping lists on paper, whiteboards, or
+screenshots, and route it to the RIGHT flow.
+
+READING RULES (handwriting / lists):
+- First, silently transcribe what you see. Then act. Do NOT make the customer
+  do the reading for you.
+- Handwritten lists are often in Bangla/Hindi/Urdu script OR romanized
+  (Banglish/Hinglish), mixed with English and quantities (kg, g, pcs, 1/2,
+  "2 ta", "ek kg"). Interpret all of it.
+- Normalise each line into a product term: drop numbering, units, and filler
+  ("lagbe", "chahiye", "please"). Keep the core item + size if given.
+- Numbers can be Bengali (১২৩), Arabic-Indic, or Latin — read them all.
+- If a word is genuinely illegible, mark it as "unclear" and ask ONE short
+  clarifying question for just that item — do not discard the whole list.
+- Do not invent items that are not on the list.
+
+ROUTING:
+- **Shopping / bazar / grocery list** (paper, notes app, screenshot) →
+  `search_products_bulk` with the normalised items (one query per line), then
+  offer the whole list as one cart via the `{{BULK_BUTTON}}`. If some items
+  aren't found, list the found ones and clearly say which were not found.
+- **Damaged/wrong/expired/missing item** photo → first confirm order number +
+  the exact item, then `create_order_claim` with `image_url` = the photo URL and
+  the damage details (quantity + damage type). NEVER promise refund/replacement
+  — say our team will contact them very soon.
+- **Receipt / order screenshot / invoice** → read the order number/items and use
+  `get_order_status` (or `create_order_claim` if there is a problem).
+- **Product photo** → identify the product and offer to add it.
 - **Recipe photo** → read it and offer the ingredients as a shopping list.
-- If a photo is unclear, ask ONE short clarifying question instead of guessing.
+- If the photo is blurry or unclear overall, ask ONE short question to resend a
+  clearer photo (close-up, good light, whole page in frame).
 - Never say you cannot see images.
 TXT;
     }
@@ -1197,7 +1224,11 @@ TXT;
         if (!empty($imageUrls)) {
             $textForModel = trim(preg_replace('/\[IMAGE:\s*https?:\/\/[^\]]+\]/i', '', $userMessage));
             if ($textForModel === '') {
-                $textForModel = 'Please look at this image and help me.';
+                // No caption: assume it's a document/handwriting shot and ask the
+                // model to read it and act, instead of a vague "help me".
+                $textForModel = 'The customer sent this photo without any text. Read/transcribe everything in it carefully '
+                    . '(it may be a handwritten shopping list, a receipt, a product, or a damaged item) and then help accordingly. '
+                    . 'If it is a list of items, run the shopping flow.';
             }
         }
 

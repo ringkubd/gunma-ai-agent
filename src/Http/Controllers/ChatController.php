@@ -81,25 +81,19 @@ class ChatController extends Controller
         // the guest_id cookie persists reliably) so the very first chat cart
         // action already shares the storefront's identity — no divergence.
         $guest = app(GuestCartService::class)->bootstrap($request, $customerId);
+        // Hand the guest cart cookie value back so the WIDGET can write it
+        // client-side in the exact storefront format. We deliberately do NOT
+        // set the cookie server-side: on stateful (Sanctum) chat routes Laravel
+        // re-encrypts outgoing cookies, which would diverge from the
+        // storefront's own (single-encrypted) guest_id and empty the cart.
         $guestCookie = (! $guest->customerId() && $guest->encryptedCookie())
             ? $guest->encryptedCookie()
             : null;
-        $response = response()->json([
+
+        return response()->json([
             'session' => $session,
-            // Hand the guest cart cookie value back so the widget can persist
-            // it (localStorage['cookie']) — the storefront's bag only queries
-            // when it has this value, and reads the matching guest_id cookie.
             'guest_cookie' => $guestCookie,
         ], 201);
-        if ($guestCookie) {
-            $response->headers->setCookie(\Illuminate\Support\Facades\Cookie::make(
-                'guest_id',
-                $guestCookie,
-                60 * 24 * 30,
-            ));
-        }
-
-        return $response;
     }
 
     /* ── Private: ownership guard ──────────────────────────────── */
@@ -206,16 +200,9 @@ class ChatController extends Controller
             }
         }, 200, $this->sseHeaders());
 
-        // Always align the browser's guest_id cookie with the identity we just
-        // used. The storefront bag reads ONLY this cookie (it ignores the path
-        // param), so without this a chat-supplied id would never match.
-        if (! $guest->customerId() && $guest->encryptedCookie()) {
-            $response->headers->setCookie(\Illuminate\Support\Facades\Cookie::make(
-                'guest_id',
-                $guest->encryptedCookie(),
-                60 * 24 * 30, // 30 days in minutes (storefront parity)
-            ));
-        }
+        // The widget writes the guest_id cookie client-side (storefront format)
+        // from the guest_cookie we return — the stateful chat route must not
+        // set it here or Laravel would double-encrypt it.
 
         return $response;
     }
@@ -238,20 +225,10 @@ class ChatController extends Controller
         $guest = app(GuestCartService::class)->bootstrap($request, auth('customer')->id());
         $reply = $this->agent->chat($session, $validated['message']);
 
-        $response = response()->json([
+        return response()->json([
             'reply' => $reply,
             'guest_cookie' => (! $guest->customerId()) ? $guest->encryptedCookie() : null,
         ]);
-
-        if (! $guest->customerId() && $guest->encryptedCookie()) {
-            $response->headers->setCookie(\Illuminate\Support\Facades\Cookie::make(
-                'guest_id',
-                $guest->encryptedCookie(),
-                60 * 24 * 30,
-            ));
-        }
-
-        return $response;
     }
 
     /* ── GET /chat/sessions/{id}/messages — Get message history ── */
@@ -714,10 +691,10 @@ class ChatController extends Controller
             'guest_cookie' => $customerId ? null : $encryptedCookie,
         ]);
 
-        // Persist the guest cookie so the next storefront request sees the cart.
-        if (!$customerId && $isNewCookie) {
-            $response->cookie('guest_id', $encryptedCookie, 60 * 24 * 30);
-        }
+        // NOTE: we intentionally do NOT set guest_id here — this is a stateful
+        // (Sanctum) route, so Laravel would encrypt the value a second time and
+        // the storefront (which decrypts once) would read garbage → empty cart.
+        // The widget writes the cookie client-side from `guest_cookie` instead.
 
         return $response;
     }

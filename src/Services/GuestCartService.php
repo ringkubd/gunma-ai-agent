@@ -19,37 +19,31 @@ class GuestCartService
     private ?string $cookieId = null;
     private ?string $encryptedCookie = null;
     private bool $isNew = false;
+    /**
+     * True when the route runs Laravel's EncryptCookies middleware (Sanctum
+     * stateful requests do). In that case an outgoing cookie is encrypted once
+     * more on the way out, so we must hand it the PLAIN id — otherwise we
+     * double-encrypt and the storefront (which decrypts only once) reads
+     * garbage → empty cart.
+     */
+    private bool $statefulCookieEncryption = false;
 
     /**
      * Resolve once per request (chat controller calls this before the agent runs).
      */
     public function bootstrap(Request $request, ?int $customerId = null): self
     {
+        $this->statefulCookieEncryption = $this->requestIsStateful($request);
+
         if ($customerId) {
             $this->customerId = $customerId;
             return $this;
         }
 
-        // 1) Prefer the storefront cookie (set by the host cart API) — the
-        //    single source of truth shared with the storefront's own cart.
-        $cookie = $request->cookie('guest_id');
-        if ($cookie) {
-            try {
-                $plain = Crypt::decrypt($cookie);
-                if ($plain !== null && $plain !== '') {
-                    $this->cookieId = (string) $plain;
-                    $this->encryptedCookie = $cookie;
-                    return $this;
-                }
-            } catch (\Throwable) {
-                // broken cookie — fall through to the input below
-            }
-        }
-
-        // 2) Widget-provided identity. It may hand us EITHER the raw cookie id
-        //    or the host's encrypted cookie value (localStorage['cookie']).
-        //    Normalize both to the SAME plain id the storefront stores in the
-        //    DB, so chat-added items and the host cart never diverge.
+        // 1) Prefer the widget-supplied identity. The storefront WRITES its
+        //    guest cart with localStorage['cookie'] (sent here as cookie_id /
+        //    cookie), so this is the authoritative id — using it keeps chat
+        //    carts on the SAME identity the storefront writes to.
         $input = trim((string) ($request->input('cookie_id') ?? $request->input('cookie', '')));
         if ($input !== '') {
             $plain = $this->normalizeCookie($input);
@@ -60,9 +54,23 @@ class GuestCartService
                 $this->encryptedCookie = $this->looksEncrypted($input)
                     ? $input
                     : Crypt::encrypt($plain);
-                // Not "new": the identity already exists on the host side.
                 $this->isNew = false;
                 return $this;
+            }
+        }
+
+        // 2) Fall back to the storefront cookie (set by the host cart API).
+        $cookie = $request->cookie('guest_id');
+        if ($cookie) {
+            try {
+                $plain = Crypt::decrypt($cookie);
+                if ($plain !== null && $plain !== '') {
+                    $this->cookieId = (string) $plain;
+                    $this->encryptedCookie = $cookie;
+                    return $this;
+                }
+            } catch (\Throwable) {
+                // broken cookie — fall through to minting below
             }
         }
 
@@ -115,8 +123,48 @@ class GuestCartService
         return $this->encryptedCookie;
     }
 
+    /**
+     * The exact value to pass to Cookie::make('guest_id', ...) so the value
+     * the BROWSER stores matches the storefront's format:
+     *  - non-stateful route: Laravel doesn't touch cookies → send encrypted.
+     *  - stateful route (Sanctum/EncryptCookies): middleware encrypts once →
+     *    send the PLAIN id so it isn't double-encrypted.
+     */
+    public function cookieValueForResponse(): ?string
+    {
+        if ($this->cookieId === null) return null;
+        return $this->statefulCookieEncryption ? $this->cookieId : $this->encryptedCookie;
+    }
+
     public function isNew(): bool
     {
         return $this->isNew;
+    }
+
+    /** Is this request stateful (Sanctum) so EncryptCookies will run? */
+    private function requestIsStateful(Request $request): bool
+    {
+        try {
+            $domains = (array) config('sanctum.stateful', []);
+            $host = $request->getHost();
+            foreach ($domains as $d) {
+                $d = trim((string) $d);
+                if ($d === '') continue;
+                if (strcasecmp($d, $host) === 0) return true;
+                // Leading-dot wildcard support (e.g. ".gunmahalalfood.com").
+                if (str_starts_with($d, '.') && str_ends_with($host, $d)) return true;
+            }
+            // Fallback: an Origin/Referer from a stateful host means Sanctum
+            // will treat the request as stateful even if the host differs.
+            $origin = (string) ($request->header('Origin') ?? $request->header('Referer') ?? '');
+            if ($origin !== '') {
+                $oh = parse_url($origin, PHP_URL_HOST) ?: '';
+                foreach ($domains as $d) {
+                    $d = ltrim(trim((string) $d), '.');
+                    if ($d !== '' && strcasecmp($d, (string) $oh) === 0) return true;
+                }
+            }
+        } catch (\Throwable) { /* default to non-stateful */ }
+        return false;
     }
 }

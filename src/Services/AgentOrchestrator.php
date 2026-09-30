@@ -334,20 +334,19 @@ class AgentOrchestrator
         $ctx = $this->getUserContext($session);
         $parts = [$this->baseSystemPrompt];
 
-        // Time/season context
-        $triggers = app(\Anwar\GunmaAgent\Services\ProactiveTriggerService::class)->getTriggers($ctx['insight']);
+        // Time context (weather/season are NOT injected — the agent used to
+        // over-talk rain/season; it must only mention them if the customer does,
+        // and answers real weather via the get_weather tool, not imagination).
         $nowLines = [];
         $nowLines[] = "## NOW";
         $nowLines[] = "- Time: " . date('l, H:i');
-        $nowLines[] = "- Period: " . $triggers['time_period'];
-        $nowLines[] = "- Season: " . $triggers['season'];
-        if (!empty($triggers['seasonal_suggestions'])) {
-            $seasonal = $triggers['seasonal_suggestions'];
-            shuffle($seasonal);
-            $nowLines[] = "- In-demand staples this period (use as BACKGROUND suggestions only, vary them, never repeat one dish): " . implode(', ', array_slice($seasonal, 0, 4));
-        }
-        if ($triggers['ramadan_coming']) $nowLines[] = "- RAMADAN COMING: Be proactive about dates, semai, chola, haleem ingredients.";
-        if ($triggers['eid_coming']) $nowLines[] = "- EID COMING: Suggest premium cuts, sweets, cooking essentials.";
+        $nowLines[] = "- Period: " . ((int) date('H') < 11 ? 'morning' : ((int) date('H') < 16 ? 'afternoon' : 'evening'));
+        // Festival awareness (ramadan/eid) is fine — NOT weather/season.
+        try {
+            $triggers = app(\Anwar\GunmaAgent\Services\ProactiveTriggerService::class)->getTriggers($ctx['insight'] ?? null);
+            if (!empty($triggers['ramadan_coming'])) $nowLines[] = "- RAMADAN COMING: Be proactive about dates, semai, chola, haleem ingredients.";
+            if (!empty($triggers['eid_coming'])) $nowLines[] = "- EID COMING: Suggest premium cuts, sweets, cooking essentials.";
+        } catch (\Throwable) { /* ignore */ }
         $parts[] = implode("\n", $nowLines);
 
         // Weather: intentionally NOT injected. The agent used to over-talk about
@@ -640,7 +639,7 @@ When the customer speaks naturally, YOU decide and call the right tools automati
 - "password bhule gechi / change password / forgot password" → search_support_kb for the exact steps; if they actually want to log in, call open_login (the login form opens inside chat — never push them to a website just for this).
 - Cart engineering: "remove koro/bad diye dao" → remove_item_from_cart; "2 ta koro/ek maal byobohar" → update_cart_quantity; "cart khali koro" → clear_cart.
 - **CART TOOLS = ONE CALL, FAST REPLY:** when the customer asks to add/remove/update/clear cart items, call ONLY the specific tool (no get_cart_contents before it, no extra recommendations after it) and confirm in the same reply. Extra tool calls make the customer wait a long time for nothing.
-- Weather rule: NEVER bring up the weather, rain, cold, or seasons on your own — the shop is about products, not weather. Only if the CUSTOMER explicitly mentions the weather, respond briefly to that. Do not repeat it later.
+- Weather rule: NEVER bring up the weather, rain, cold, or seasons on your own — the shop is about products, not weather. If (and only if) the CUSTOMER explicitly asks about the weather, call `get_weather` and answer with the LIVE result — never guess or invent rain/temperature. Keep it to one brief line and do not repeat it in later turns.
 - Order status: the customer only needs to give the ORDER NUMBER (or tracking number) — NO login, email or phone required. Always look it up and tell them the delivery status.
 - Order changes: only for PENDING orders. The customer must be logged in OR give the email used on the order (must match). Then change the delivery date/time or cancel it for them.
 - "recipe / ranna" → search_recipes then search_products_bulk for the ingredients ({{BULK_BUTTON}} list).

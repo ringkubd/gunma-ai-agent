@@ -403,12 +403,13 @@ class PikuFeedController extends Controller
                 if (count($out) >= $limit) break;
                 $add('tip', $tip, null, null, 30, 35000);
             }
-            // 9) Seasonal / time-based opener (existing ProactiveTriggerService)
+            // 9) Seasonal opener — ONLY for real festivals (ramadan/eid). Never
+            //    weather/season chatter (the agent must not volunteer weather).
             if (count($out) < $limit) {
                 try {
                     $triggers = app(\Anwar\GunmaAgent\Services\ProactiveTriggerService::class)->getTriggers();
                     $season = (string) ($triggers['season'] ?? '');
-                    if ($season !== '' && in_array($season, ['ramadan', 'eid', 'winter', 'summer', 'rainy'], true)) {
+                    if (in_array($season, ['ramadan', 'eid'], true)) {
                         $seasonLines = [
                             'bn' => "{$season} সিজনের স্পেশাল রেডি — কী লাগবে বলুন! 🍽️",
                             'hi' => "{$season} सीज़न का स्पेशल तैयार है — बताइए क्या चाहिए! 🍽️",

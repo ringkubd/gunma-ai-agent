@@ -69,6 +69,7 @@ class ToolExecutor
             'get_featured_recipe'            => $this->getFeaturedRecipe(),
             'create_support_ticket'          => $this->createSupportTicket($args),
             'check_delivery_time'            => $this->checkDeliveryTime($args),
+            'get_weather'                    => $this->getWeather($args),
             'check_stock_availability'       => $this->checkStockAvailability($args),
             'get_trending_products'          => $this->decorateStock($this->getTrendingProducts($args)),
             'get_cart_contents'              => $this->getCartContents(),
@@ -745,6 +746,50 @@ class ToolExecutor
             'cutoff_note' => $beforeCutoff
                 ? "Orders received before {$cutoff} can be sent to delivery on the SAME day (subject to the area's normal schedule)."
                 : "The {$cutoff} same-day cutoff has passed, so the order will go out on the NEXT available delivery day.",
+        ];
+    }
+
+    /**
+     * Live weather for the customer's area (Open-Meteo, no key). Only used when
+     * the customer asks about the weather — never volunteered.
+     */
+    private function getWeather(array $args): array
+    {
+        $loc = trim((string) ($args['location'] ?? ''));
+
+        // Prefer an explicit location, else the customer's saved area.
+        if ($loc === '') {
+            try {
+                $customer = auth('customer')->user();
+                if ($customer) {
+                    $addressModel = $this->getModelClass('address', \App\Models\Address::class);
+                    if ($addressModel) {
+                        $address = $addressModel::where('customer_id', $customer->id)
+                            ->orderByDesc('default')->orderByDesc('id')->first();
+                        $loc = (string) ($address->state ?? $address->postal_code ?? '');
+                    }
+                }
+            } catch (\Throwable) { /* ignore */ }
+        }
+        if ($loc === '') {
+            return [
+                'status' => 'no_location',
+                'message' => 'Location unknown — ask the customer for their city / post code (or address) to check the weather.',
+            ];
+        }
+
+        $weather = app(\Anwar\GunmaAgent\Services\WeatherService::class)->forLocation($loc);
+        if (! $weather) {
+            return ['status' => 'error', 'message' => 'Weather lookup is unavailable right now.'];
+        }
+
+        return [
+            'status'    => 'success',
+            'location'  => $loc,
+            'summary'   => $weather['summary'] ?? null,
+            'temp'      => $weather['temp'] ?? null,
+            'condition' => $weather['condition'] ?? null,
+            'note'      => 'Live weather for the customer area. Report it plainly and briefly. Do NOT force a food suggestion on it unless the customer is actually asking for one.',
         ];
     }
 
@@ -1857,6 +1902,19 @@ class ToolExecutor
                             'quantity' => ['type' => 'integer', 'description' => 'New quantity (0 = remove).'],
                         ],
                         'required' => ['product_id', 'quantity'],
+                    ],
+                ],
+            ],
+            [
+                'type' => 'function',
+                'function' => [
+                    'name' => 'get_weather',
+                    'description' => 'Get LIVE current weather for the customer area. Call this ONLY when the customer explicitly asks about the weather (e.g. "aj weather kemon?"). Never volunteer weather otherwise.',
+                    'parameters' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'location' => ['type' => 'string', 'description' => 'City / post code / area (optional; defaults to the customer saved address).'],
+                        ],
                     ],
                 ],
             ],

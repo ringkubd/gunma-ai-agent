@@ -81,13 +81,20 @@ class ChatController extends Controller
         // the guest_id cookie persists reliably) so the very first chat cart
         // action already shares the storefront's identity — no divergence.
         $guest = app(GuestCartService::class)->bootstrap($request, $customerId);
+        $guestCookie = (! $guest->customerId() && $guest->encryptedCookie())
+            ? $guest->encryptedCookie()
+            : null;
         $response = response()->json([
             'session' => $session,
+            // Hand the guest cart cookie value back so the widget can persist
+            // it (localStorage['cookie']) — the storefront's bag only queries
+            // when it has this value, and reads the matching guest_id cookie.
+            'guest_cookie' => $guestCookie,
         ], 201);
-        if (! $guest->customerId() && $guest->isNew() && $guest->encryptedCookie()) {
+        if ($guestCookie) {
             $response->headers->setCookie(\Illuminate\Support\Facades\Cookie::make(
                 'guest_id',
-                $guest->encryptedCookie(),
+                $guestCookie,
                 60 * 24 * 30,
             ));
         }
@@ -199,7 +206,10 @@ class ChatController extends Controller
             }
         }, 200, $this->sseHeaders());
 
-        if (! $guest->customerId() && $guest->isNew()) {
+        // Always align the browser's guest_id cookie with the identity we just
+        // used. The storefront bag reads ONLY this cookie (it ignores the path
+        // param), so without this a chat-supplied id would never match.
+        if (! $guest->customerId() && $guest->encryptedCookie()) {
             $response->headers->setCookie(\Illuminate\Support\Facades\Cookie::make(
                 'guest_id',
                 $guest->encryptedCookie(),
@@ -230,9 +240,10 @@ class ChatController extends Controller
 
         $response = response()->json([
             'reply' => $reply,
+            'guest_cookie' => (! $guest->customerId()) ? $guest->encryptedCookie() : null,
         ]);
 
-        if (! $guest->customerId() && $guest->isNew()) {
+        if (! $guest->customerId() && $guest->encryptedCookie()) {
             $response->headers->setCookie(\Illuminate\Support\Facades\Cookie::make(
                 'guest_id',
                 $guest->encryptedCookie(),

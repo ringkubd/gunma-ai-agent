@@ -53,6 +53,16 @@ class CustomerProfileService
             $profile['orders']    = $this->orders($customerId);
             $profile['cart']      = $this->cartByCustomer($customerId);
             $profile['addresses'] = $this->addresses($customerId);
+        } else {
+            // Guest: resolve the SAME cart identity the storefront uses
+            // (encrypted `guest_id` cookie → plain cookie_id) so the profile
+            // shows the guest's real cart/orders instead of staying empty.
+            $guestCookieId = $this->guestCookieId();
+            if ($guestCookieId) {
+                $profile['session']['cookie_id'] = $guestCookieId;
+                $profile['cart']  = $this->cartByCookie($guestCookieId);
+                $profile['orders'] = $this->guestOrdersByCookie($guestCookieId);
+            }
         }
 
         $profile['activity'] = $this->activity($customerId, $visitorId);
@@ -141,6 +151,75 @@ class CustomerProfileService
                     'quantity'   => (float) $c->quantity,
                     'price'      => (float) $c->item_price,
                     'line_total' => (float) $c->total_amount,
+                ])
+                ->toArray();
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /** Resolve the guest cart identity from the request (shared guest_id cookie). */
+    private function guestCookieId(): ?string
+    {
+        try {
+            if (! app()->bound('request')) return null;
+            $guest = app(\Anwar\GunmaAgent\Services\GuestCartService::class)
+                ->bootstrap(request(), auth('customer')->id());
+            return $guest->customerId() ? null : $guest->cookieId();
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /** Guest cart lines keyed by cookie_id (storefront stores the plain id). */
+    private function cartByCookie(string $cookieId): array
+    {
+        try {
+            $cartModel = config('gunma-agent.models.cart');
+            if (! $cartModel || ! class_exists($cartModel)) {
+                return [];
+            }
+
+            return $cartModel::with('product')
+                ->whereNull('customer_id')
+                ->where('cookie_id', $cookieId)
+                ->get()
+                ->map(fn ($c) => [
+                    'product_id' => $c->product_id,
+                    'title'      => $c->product->title ?? null,
+                    'quantity'   => (float) $c->quantity,
+                    'price'      => (float) $c->item_price,
+                    'line_total' => (float) $c->total_amount,
+                ])
+                ->toArray();
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /** Guest orders placed under this cookie identity (best-effort). */
+    private function guestOrdersByCookie(string $cookieId): array
+    {
+        try {
+            $orderModel = config('gunma-agent.models.order');
+            if (! $orderModel || ! class_exists($orderModel)) return [];
+            $table = (new $orderModel)->getTable();
+            if (! \Illuminate\Support\Facades\DB::getSchemaBuilder()->hasColumn($table, 'cookie_id')) {
+                return [];
+            }
+            return $orderModel::whereNull('customer_id')
+                ->where('cookie_id', $cookieId)
+                ->whereNotIn('status', ['Payment Failed', 'Payment Pending'])
+                ->latest()
+                ->limit(10)
+                ->get()
+                ->map(fn ($o) => [
+                    'id'             => $o->id,
+                    'status'         => $o->status ?? null,
+                    'payment_status' => $o->payment_status ?? null,
+                    'total_amount'   => (float) ($o->total_amount ?? 0),
+                    'delivery_date'  => $o->delivary_date ? (string) $o->delivary_date : null,
+                    'created_at'     => isset($o->created_at) ? (string) $o->created_at : null,
                 ])
                 ->toArray();
         } catch (\Throwable $e) {

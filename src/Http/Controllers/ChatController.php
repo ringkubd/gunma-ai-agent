@@ -69,7 +69,7 @@ class ChatController extends Controller
                 'status'        => 'active',
                 'metadata'      => $validated['metadata'] ?? null,
             ]);
-        } elseif ($customerId && ! $session->customer_id) {
+        } else        if ($customerId && ! $session->customer_id) {
             // Upgrade anonymous session to authenticated
             $session->update([
                 'customer_id'   => $customerId,
@@ -77,9 +77,22 @@ class ChatController extends Controller
             ]);
         }
 
-        return response()->json([
+        // Bootstrap the guest cart identity here too (plain JSON response →
+        // the guest_id cookie persists reliably) so the very first chat cart
+        // action already shares the storefront's identity — no divergence.
+        $guest = app(GuestCartService::class)->bootstrap($request, $customerId);
+        $response = response()->json([
             'session' => $session,
         ], 201);
+        if (! $guest->customerId() && $guest->isNew() && $guest->encryptedCookie()) {
+            $response->headers->setCookie(\Illuminate\Support\Facades\Cookie::make(
+                'guest_id',
+                $guest->encryptedCookie(),
+                60 * 24 * 30,
+            ));
+        }
+
+        return $response;
     }
 
     /* ── Private: ownership guard ──────────────────────────────── */
@@ -709,14 +722,11 @@ class ChatController extends Controller
             return [null, null, false];
         }
 
-        $cookie = $request->cookie('guest_id') ?? $request->input('cookie');
-
-        if ($cookie) {
-            try {
-                return [\Illuminate\Support\Facades\Crypt::decrypt($cookie), $cookie, false];
-            } catch (\Exception $e) {
-                // Fall through — broken cookie, regenerate.
-            }
+        // Delegate to the shared resolver so the bulk-add path uses the SAME
+        // identity logic as the agent cart tools (raw OR encrypted cookie_id).
+        $guest = app(GuestCartService::class)->bootstrap($request, null);
+        if ($guest->cookieId()) {
+            return [$guest->cookieId(), $guest->encryptedCookie(), $guest->isNew()];
         }
 
         $cookieId = \Illuminate\Support\Str::random(20);

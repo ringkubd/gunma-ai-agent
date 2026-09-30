@@ -40,6 +40,9 @@ class AgentSettingsService
         // Storefront feature flags
         'doodle_enabled',
         'widget_enabled',
+        // Delivery: same-day order cutoff (HH:MM) and claim attribution user.
+        'delivery_cutoff_time',
+        'claim_user_id',
     ];
 
     /** @var array<string,string|null>|null */
@@ -145,6 +148,8 @@ class AgentSettingsService
             'embedding_dims'         => (string) config('gunma-agent.embedding.dims', 768),
             'doodle_enabled'         => '1',
             'widget_enabled'         => '1',
+            'delivery_cutoff_time'   => '14:00',
+            'claim_user_id'          => '',
         ];
     }
 }

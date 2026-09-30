@@ -19,6 +19,27 @@ class ToolExecutor
         private readonly QdrantService $qdrantService,
     ) {}
 
+    /** Active chat session for this request (set by the orchestrator). */
+    private ?string $activeSessionId = null;
+
+    public function setActiveSession(?string $sessionId): void
+    {
+        $this->activeSessionId = $sessionId ?: null;
+    }
+
+    /** Resolve the session id: explicit arg → active session → header. */
+    private function resolveSessionId(?string $explicit = null): ?string
+    {
+        if ($explicit) return $explicit;
+        if ($this->activeSessionId) return $this->activeSessionId;
+        try {
+            $h = request()->header('X-Chat-Session-Id');
+            return $h ? (string) $h : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     /* ── Helper: get insight service (lazy load) ───────────────── */
 
     private function insightService(): CustomerInsightService
@@ -694,6 +715,23 @@ class ToolExecutor
         $data = $postCodeModel::with(['schedules', 'city', 'state'])->where('code', $postCode)->first();
         if (!$data) return ['error' => 'Post code not found.'];
 
+        // Same-day order cutoff: agent setting → host settings table → 14:00.
+        $cutoff = null;
+        try {
+            $cutoff = app(\Anwar\GunmaAgent\Services\AgentSettingsService::class)->get('delivery_cutoff_time');
+        } catch (\Throwable) { /* ignore */ }
+        if (! $cutoff) {
+            try {
+                $cutoff = \Illuminate\Support\Facades\DB::table('settings')
+                    ->where('type', 'order_cutoff_time')->value('value');
+            } catch (\Throwable) { /* host table may differ */ }
+        }
+        $cutoff = $cutoff ?: '14:00';
+
+        $now = now();
+        $cutoffToday = $now->copy()->setTimeFromTimeString($cutoff);
+        $beforeCutoff = $now->lessThanOrEqualTo($cutoffToday);
+
         return [
             'status' => 'success',
             'post_code' => $data->code,
@@ -701,6 +739,12 @@ class ToolExecutor
             'state' => $data->state->name ?? null,
             'delay_days' => (int) ($data->after_delay ?? 0),
             'schedules' => $data->schedules->pluck('schedule')->toArray(),
+            'order_cutoff_time' => $cutoff,
+            'current_time' => $now->format('H:i'),
+            'before_cutoff' => $beforeCutoff,
+            'cutoff_note' => $beforeCutoff
+                ? "Orders received before {$cutoff} can be sent to delivery on the SAME day (subject to the area's normal schedule)."
+                : "The {$cutoff} same-day cutoff has passed, so the order will go out on the NEXT available delivery day.",
         ];
     }
 
@@ -1111,12 +1155,30 @@ class ToolExecutor
 
     private function handOffToHuman(array $args): array
     {
-        $sessionId = $args['session_id'] ?? null;
+        $sessionId = $this->resolveSessionId($args['session_id'] ?? null);
+        $session = null;
         if ($sessionId) {
             $session = \Anwar\GunmaAgent\Models\ChatSession::find($sessionId);
-            if ($session) $session->update(['is_ai_enabled' => false]);
+            if ($session) {
+                $session->update(['is_ai_enabled' => false]);
+                // Alert the human team (dashboard listens on this channel).
+                try { event(new \Anwar\GunmaAgent\Events\AiStatusChanged($session)); } catch (\Throwable) {}
+            }
         }
-        return ['status' => 'success', 'message' => 'A human agent will take over shortly.'];
+
+        try {
+            app(\Anwar\GunmaAgent\Services\PikuAnalytics::class)->log('support_handoff', [
+                'session_id'  => $sessionId,
+                'customer_id' => $session?->customer_id ? (int) $session->customer_id : null,
+                'visitor_id'  => $session?->visitor_id ?? null,
+            ], ['reason' => $args['reason'] ?? 'customer_requested']);
+        } catch (\Throwable) {}
+
+        return [
+            'status'  => 'success',
+            'message' => 'A human agent will take over shortly.',
+            'handoff' => true,
+        ];
     }
 
     /**
@@ -1150,28 +1212,160 @@ class ToolExecutor
     private function createOrderClaim(array $args): array
     {
         $customer = auth('customer')->user();
-        $sessionId = request()->header('X-Chat-Session-Id');
+        $sessionId = $this->resolveSessionId();
 
+        $orderId = $args['order_id'] ?? null;
+        if (! $orderId) {
+            return ['error' => 'Please give the order number first.'];
+        }
+
+        // ── 1) Validate the order AND the item ──────────────────────────
+        $orderModel = $this->getModelClass('order', \App\Models\Order::class);
+        $order = $orderModel ? $orderModel::with('orderItems')->find($orderId) : null;
+        if (! $order) {
+            return ['error' => "এই order number টা পাইনি — order number টা আবার ঠিক করে বলুন।"];
+        }
+
+        $itemTitles = collect($order->orderItems ?? [])
+            ->pluck('product_title')->filter()->values()->all();
+        $claimedItem = trim((string) ($args['product_details'] ?? ''));
+        $itemVerified = false;
+        if ($claimedItem !== '' && ! empty($itemTitles)) {
+            $needle = mb_strtolower($claimedItem);
+            foreach ($itemTitles as $title) {
+                $t = mb_strtolower((string) $title);
+                if ($t === $needle || str_contains($t, $needle) || str_contains($needle, $t)
+                    || levenshtein(mb_substr($t, 0, 40), mb_substr($needle, 0, 40)) <= 4) {
+                    $itemVerified = true;
+                    break;
+                }
+            }
+        }
+
+        if (! $itemVerified) {
+            return [
+                'status' => 'needs_item',
+                'error'  => true,
+                'message' => 'এই order-এ "' . ($claimedItem ?: 'এই item') . '" নেই। '
+                    . 'অর্ডারে যে item গুলো আছে: ' . implode(', ', array_slice($itemTitles, 0, 20)) . '. '
+                    . 'কোন item টার সমস্যা বলুন, আমি ঠিক সেটার claim নোট করবো.',
+                'order_items' => array_slice($itemTitles, 0, 20),
+            ];
+        }
+
+        // ── 2) Structured details + amount ──────────────────────────────
+        $damageType = (string) ($args['damage_type'] ?? '');
+        $quantity   = (string) ($args['quantity'] ?? '');
+        $amount     = isset($args['amount']) ? (float) $args['amount'] : null;
+        $photoUrl   = (string) ($args['image_url'] ?? $args['photo_url'] ?? '');
+        $note       = (string) ($args['message'] ?? '');
+
+        $issueType = in_array($args['issue_type'] ?? '', ['product_missing', 'product_damage', 'extra_item', 'wrong_item'], true)
+            ? $args['issue_type']
+            : 'product_damage';
+
+        $summary = [];
+        $summary[] = "Item: {$claimedItem}";
+        if ($damageType) $summary[] = "Problem: {$damageType}";
+        if ($quantity)   $summary[] = "Quantity: {$quantity}";
+        if ($amount !== null) $summary[] = "Claim amount: ¥" . number_format($amount);
+        if ($note)       $summary[] = "Details: {$note}";
+        if ($photoUrl)   $summary[] = "Photo: {$photoUrl}";
+        $message = implode("\n", $summary);
+
+        // ── 3) Record the support ticket (agent dashboard) ──────────────
         $ticket = \Anwar\GunmaAgent\Models\SupportTicket::create([
             'session_id'  => $sessionId,
-            'customer_id' => $customer->id ?? null,
+            'customer_id' => $customer->id ?? (int) ($order->customer_id ?? 0) ?: null,
             'name'        => $customer->name ?? 'Guest',
             'email'       => $customer->email ?? null,
-            'order_id'    => $args['order_id'],
-            'issue_type'  => $args['issue_type'] ?? 'claim',
-            'subject'     => "Claim: {$args['issue_type']} for Order #{$args['order_id']}",
-            'message'     => "Products: " . ($args['product_details'] ?? 'N/A') . "\n" . ($args['message'] ?? ''),
+            'order_id'    => $orderId,
+            'issue_type'  => $issueType,
+            'subject'     => "Claim: {$issueType} for Order #{$orderId}",
+            'message'     => $message,
             'status'      => 'pending',
-            'metadata'    => $args,
+            'metadata'    => array_merge($args, [
+                'product_details' => $claimedItem,
+                'damage_type'     => $damageType,
+                'quantity'        => $quantity,
+                'amount'          => $amount,
+                'image_url'       => $photoUrl,
+                'item_verified'   => true,
+            ]),
         ]);
 
-        event(new \Anwar\GunmaAgent\Events\SupportTicketCreated($ticket, $args));
+        try { event(new \Anwar\GunmaAgent\Events\SupportTicketCreated($ticket, $args)); } catch (\Throwable) {}
+
+        // ── 4) Mirror into the host order_claims table (admin claim mgmt) ─
+        $hostClaimId = $this->mirrorHostClaim($order, $issueType, $message, $amount, $photoUrl, $sessionId);
+
+        try {
+            app(\Anwar\GunmaAgent\Services\PikuAnalytics::class)->log('tool_call', [
+                'session_id'  => $sessionId,
+                'customer_id' => $customer->id ?? null,
+                'order_id'    => $orderId,
+                'tool'        => 'create_order_claim',
+            ], ['issue_type' => $issueType, 'item' => $claimedItem]);
+        } catch (\Throwable) {}
 
         return [
-            'status' => 'success',
-            'message' => 'Claim registered. Claim ID: ' . $ticket->id,
+            'status'   => 'success',
+            'message'  => 'Claim noted. Our team will contact the customer very soon to discuss this. '
+                . 'Do NOT promise a refund or replacement — just reassure that our team will reach out shortly.',
             'claim_id' => $ticket->id,
+            'host_claim_id' => $hostClaimId,
         ];
+    }
+
+    /**
+     * Mirror a validated claim into the host's `order_claims` table so it shows
+     * up in the existing admin claim-management UI. Best-effort and read-only
+     * against host models; writes only to the claims table.
+     */
+    private function mirrorHostClaim($order, string $issueType, string $message, ?float $amount, string $photoUrl, ?string $sessionId): ?int
+    {
+        try {
+            if (! \Illuminate\Support\Facades\DB::getSchemaBuilder()->hasTable('order_claims')) {
+                return null;
+            }
+
+            // Map the agent issue type to the host's claim-type labels.
+            $map = [
+                'product_damage'  => 'Damaged',
+                'product_missing' => 'Missing Item',
+                'extra_item'      => 'Extra Item',
+                'wrong_item'      => 'Wrong Product',
+            ];
+            $hostType = $map[$issueType] ?? 'Damaged';
+
+            $claimUserId = null;
+            try {
+                $claimUserId = app(\Anwar\GunmaAgent\Services\AgentSettingsService::class)->int('claim_user_id', 0) ?: null;
+            } catch (\Throwable) {}
+            if (! $claimUserId) {
+                try {
+                    $claimUserId = \Illuminate\Support\Facades\DB::table('users')->orderBy('id')->value('id');
+                } catch (\Throwable) {}
+            }
+
+            $note = mb_substr(preg_replace('/\s+/', ' ', $message) ?? $message, 0, 280);
+            if ($photoUrl) {
+                $note = mb_substr($note . ' | photo: ' . $photoUrl, 0, 300);
+            }
+
+            return (int) \Illuminate\Support\Facades\DB::table('order_claims')->insertGetId([
+                'order_id'   => (int) ($order->id ?? 0) ?: null,
+                'claim_by'   => $claimUserId,
+                'amount'     => $amount ?? 0,
+                'type'       => $hostType,
+                'note'       => $note,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::debug('[Claim] host mirror failed', ['error' => $e->getMessage()]);
+            return null;
+        }
     }
 
     private function getPersonalizedRecommendations(array $args): array
@@ -1770,14 +1964,18 @@ class ToolExecutor
                 'type' => 'function',
                 'function' => [
                     'name' => 'create_order_claim',
-                    'description' => 'Register a claim for missing, damaged, or extra items in an order.',
+                    'description' => 'Register a claim for a missing, damaged, wrong, or extra item in an order. FIRST confirm the order number AND the exact item (the item must exist in that order — the tool will reject it otherwise), then collect what happened. Never promise a refund or replacement; just record it and say our team will contact the customer very soon.',
                     'parameters' => [
                         'type' => 'object',
                         'properties' => [
-                            'order_id' => ['type' => 'string', 'description' => 'Order ID.'],
-                            'issue_type' => ['type' => 'string', 'enum' => ['product_missing', 'product_damage', 'extra_item']],
-                            'product_details' => ['type' => 'string'],
-                            'message' => ['type' => 'string'],
+                            'order_id' => ['type' => 'string', 'description' => 'Order ID (required).'],
+                            'issue_type' => ['type' => 'string', 'enum' => ['product_damage', 'product_missing', 'wrong_item', 'extra_item']],
+                            'product_details' => ['type' => 'string', 'description' => 'Exact item name as it appears in the order (required).'],
+                            'damage_type' => ['type' => 'string', 'description' => 'What kind of problem: crushed / broken / spoiled / leaking / expired / wrong item / missing / extra.'],
+                            'quantity' => ['type' => 'string', 'description' => 'How much was affected, e.g. "1kg" or "2 packs".'],
+                            'amount' => ['type' => 'number', 'description' => 'Approx value/claim amount in ¥ if the customer gives one.'],
+                            'image_url' => ['type' => 'string', 'description' => 'URL of an attached damage photo, if any.'],
+                            'message' => ['type' => 'string', 'description' => 'Short summary of what the customer reported.'],
                         ],
                         'required' => ['order_id', 'issue_type', 'product_details', 'message'],
                     ],

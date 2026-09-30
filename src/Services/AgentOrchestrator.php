@@ -632,8 +632,11 @@ When the customer speaks naturally, YOU decide and call the right tools automati
 - "order kothay / amar order / order status" → get_order_status with the order number they give (NO login/email needed). Only the owner-email case reveals the address.
 - "order change / date bodlao / cancel koro" → update_pending_order (PENDING only; needs login OR the order email). If not pending, offer a support ticket instead.
 - "delivery kobe / koto din" → check_delivery_time / check_stock_availability with post code.
+- **DELIVERY TIMING (very important):** the shop packs same-day only for orders placed before the daily cutoff (default **2:00 PM**; `check_delivery_time` returns the exact `order_cutoff_time` + `cutoff_note`). If a customer asks when their order will go out, state this plainly — before cutoff → can go out today, after cutoff → next available delivery day — combined with the area's `delay_days`/schedules. Never guarantee an exact arrival time.
 - "kichu jante chai / info" → search_support_kb, then answer conversationally.
 - "problem / complaint / payment issue" → create_support_ticket; missing/damaged → create_order_claim.
+- "manus/mature/agent ke dao / talk to a human / real person / manager" → hand_off_to_human. Then reassure: "আমাদের টিম খুব দ্রুত আপনার সাথে যোগাযোগ করবে।" Never promise a specific time/resolution.
+- ALWAYS call hand_off_to_human (then reassure the customer that our team will contact them very soon) when: the customer explicitly asks for a human; there is a refund/replacement/compensation dispute you cannot decide; a payment/account issue needs manual action; or you have failed the same request 2+ times. After handoff, keep the chat open and let the human reply — do NOT keep guessing answers.
 - "password bhule gechi / change password / forgot password" → search_support_kb for the exact steps; if they actually want to log in, call open_login (the login form opens inside chat — never push them to a website just for this).
 - Cart engineering: "remove koro/bad diye dao" → remove_item_from_cart; "2 ta koro/ek maal byobohar" → update_cart_quantity; "cart khali koro" → clear_cart.
 - **CART TOOLS = ONE CALL, FAST REPLY:** when the customer asks to add/remove/update/clear cart items, call ONLY the specific tool (no get_cart_contents before it, no extra recommendations after it) and confirm in the same reply. Extra tool calls make the customer wait a long time for nothing.
@@ -687,12 +690,14 @@ Never let the customer reach the payment step with an item that cannot be ordere
   "Cash on delivery — payment delivery-r time hobe, kono problem nei."
 - Only raise a payment concern for card/online orders that are genuinely unpaid or failed.
 
-## IMAGES (multimodal)
-If the customer sends a photo (product, recipe, receipt, damaged item, screenshot):
-- Look at it and respond helpfully. Identify the product/issue from the image.
-- Product photo → search for a matching product and offer to add it.
-- Recipe photo → read it and offer the ingredients as a shopping list.
-- Damaged/wrong item or receipt → create_order_claim / create_support_ticket and reassure them.
+## IMAGES & ATTACHMENTS (multimodal — handle smartly)
+Read every photo the customer sends and route it to the RIGHT flow:
+- **Shopping/bazar list** (a written list, notes app, screenshot of items) → read all items, then `search_products_bulk` for them and offer the whole list as one cart via the `{{BULK_BUTTON}}`.
+- **Damaged/wrong/expired/missing item** photo → first confirm order number + the exact item, then `create_order_claim` with `image_url` = the photo URL and the damage details. NEVER promise refund/replacement — say our team will contact them very soon.
+- **Receipt / order screenshot / invoice** → `get_order_status` (or `create_order_claim` if there is a problem). Confirm the order + item before any claim.
+- **Product photo** → find the matching product and offer to add it.
+- **Recipe photo** → read it and offer the ingredients as a shopping list.
+- If a photo is unclear, ask ONE short clarifying question instead of guessing.
 - Never say you cannot see images.
 TXT;
     }
@@ -918,6 +923,7 @@ TXT;
 
     private function runAgentLoop(ChatSession $session, string $userMessage): string
     {
+        $this->toolExecutor->setActiveSession($session->id);
         $imageUrls = $this->extractImageUrls($userMessage);
         $messages = $this->buildContextWindow($session, $userMessage, $imageUrls);
         $finalContent = '';
@@ -958,6 +964,10 @@ TXT;
                     foreach ($message['tool_calls'] as $toolCall) {
                         $fnName = $toolCall['function']['name'] ?? '';
                         $fnArgs = json_decode($toolCall['function']['arguments'] ?? '{}', true) ?: [];
+                        // Attach the current image (if any) so claim/photo tools can store it.
+                        if ($fnName === 'create_order_claim' && ! empty($imageUrls) && empty($fnArgs['image_url'])) {
+                            $fnArgs['image_url'] = $imageUrls[0];
+                        }
                         if (in_array($fnName, self::ACTION_TOOLS, true)) {
                             $usedActionTool = true;
                         }
@@ -999,6 +1009,7 @@ TXT;
 
     private function runAgentLoopStream(ChatSession $session, string $userMessage): \Generator
     {
+        $this->toolExecutor->setActiveSession($session->id);
         $imageUrls = $this->extractImageUrls($userMessage);
         $messages = $this->buildContextWindow($session, $userMessage, $imageUrls);
 
@@ -1041,6 +1052,10 @@ TXT;
                     foreach ($message['tool_calls'] as $toolCall) {
                         $fnName = $toolCall['function']['name'] ?? '';
                         $fnArgs = json_decode($toolCall['function']['arguments'] ?? '{}', true) ?: [];
+                        // Attach the current image (if any) so claim/photo tools can store it.
+                        if ($fnName === 'create_order_claim' && ! empty($imageUrls) && empty($fnArgs['image_url'])) {
+                            $fnArgs['image_url'] = $imageUrls[0];
+                        }
                         if (in_array($fnName, self::ACTION_TOOLS, true)) {
                             $usedActionTool = true;
                         }

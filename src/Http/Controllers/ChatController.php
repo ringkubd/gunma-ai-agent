@@ -251,6 +251,8 @@ class ChatController extends Controller
                 'role'       => $m->role,
                 'content'    => $m->content,
                 'model'      => $m->model,
+                'author'     => $m->author,
+                'agent_name' => $m->agent_name,
                 'created_at' => $m->created_at->toIso8601String(),
             ]);
 

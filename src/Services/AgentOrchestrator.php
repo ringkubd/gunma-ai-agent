@@ -72,16 +72,28 @@ class AgentOrchestrator
             return null;
         }
 
-        $baseUrl = (string) config('gunma-agent.vision.base_url', config('gunma-agent.llm.base_url'));
-        $model   = (string) config('gunma-agent.vision.model', '');
-        $apiKey  = (string) config('gunma-agent.vision.api_key', config('gunma-agent.llm.api_key'));
-
-        // If no dedicated vision model is set, fall back to the main LLM.
+        // Base URL / key must fall back to the DB-backed LLM settings (the
+        // live values live in agent_settings, not config), otherwise vision
+        // silently disables and images never reach a vision model.
+        $llm     = $this->llm();
+        $baseUrl = (string) (
+            config('gunma-agent.vision.base_url')
+            ?: $llm['base_url']
+            ?: config('gunma-agent.llm.base_url')
+        );
+        $apiKey  = (string) (
+            config('gunma-agent.vision.api_key')
+            ?: $llm['api_key']
+            ?: config('gunma-agent.llm.api_key')
+        );
+        // Vision model: env override → main model (strip any ':cloud' proxy suffix).
+        $model = trim((string) config('gunma-agent.vision.model', ''));
         if ($model === '') {
-            return $this->llm();
+            $model = (string) $llm['model'];
         }
+        $model = preg_replace('/:cloud$/i', '', $model) ?: $model;
 
-        if ($baseUrl === '') {
+        if ($baseUrl === '' || $model === '') {
             return null;
         }
 
@@ -142,6 +154,13 @@ class AgentOrchestrator
     private function shouldUseSemanticCache(ChatSession $session, string $message): bool
     {
         if (! config('gunma-agent.semantic_cache_enabled', true)) {
+            return false;
+        }
+
+        // NEVER cache image/multimodal messages — the reply depends on the
+        // pixels, and the text marker is generic (this caused stale "image
+        // looks blank" answers to be cached and re-served).
+        if (preg_match('/\[IMAGE:\s*https?:\/\/[^\]]+\]/i', $message)) {
             return false;
         }
 

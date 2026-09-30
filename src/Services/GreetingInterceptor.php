@@ -180,10 +180,13 @@ class GreetingInterceptor
         $code = strtolower((string) ($ctx['language_code'] ?? 'en'));
         $primary = explode('-', $code)[0];
 
-        // If the greeting itself is romanized, mirror that style regardless of profile.
+        // Romanized greetings still map to the language, but we reply in the
+        // NATIVE script (Banglish→বাংলা, Hinglish→हिन्दी, Roman-Urdu→اردو) —
+        // romanized replies are not allowed.
         $style = $this->romanStyle($clean);
         if ($style !== null) {
-            $tpl = self::TEMPLATES[$style];
+            $native = ['banglish' => 'bn', 'hinglish' => 'hi', 'roman_ur' => 'ur'][$style] ?? null;
+            $tpl = $native ? (self::TEMPLATES[$native] ?? null) : null;
         } else {
             // Native script for the preferred language; else English.
             $tpl = self::TEMPLATES[$primary] ?? null;

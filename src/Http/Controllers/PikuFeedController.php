@@ -291,7 +291,7 @@ class PikuFeedController extends Controller
             } catch (\Throwable) {}
         }
         $greet = match ($lang) {
-            'bn' => $name ? "Apni to ribol holen {$name}! Aaj ki lagbe? 😊" : 'Assalamu alaikum! Aaj ki ranna hobe? Ami ready 🍳',
+            'bn' => $name ? "আপনি তো রিবল হলেন {$name}! আজ কী লাগবে? 😊" : 'আসসালামু আলাইকুম! আজ কী রান্না হবে? আমি রেডি 🍳',
             'hi' => $name ? "नमस्ते {$name}! आज क्या बनाएंगे?" : 'नमस्ते! आज मैं क्या दिला दूँ? 💬',
             default => $name ? "Hello {$name}! What are we cooking today? 😊" : 'Hi! What can I get for you today? 💬',
         };
@@ -306,10 +306,10 @@ class PikuFeedController extends Controller
             $p = $this->productBrief($customerId, $firstPid, $lang);
             if ($p) {
                 $chips = [
-                    ['label' => ($lang === 'bn' ? 'Recipe dao' : 'Recipe please'), 'prefill' => "{$p['title']} er recipe dao"],
-                    ['label' => ($lang === 'bn' ? 'Cart dekhao' : 'Show cart'), 'prefill' => 'amar cart dekhao'],
+                    ['label' => ($lang === 'bn' ? 'রেসিপি দাও' : 'Recipe please'), 'prefill' => "{$p['title']} er recipe dao"],
+                    ['label' => ($lang === 'bn' ? 'কার্ট দেখাও' : 'Show cart'), 'prefill' => 'amar cart dekhao'],
                 ];
-                $add('cart_complement', ($lang === 'bn' ? 'Apnar cart e ' : 'You have ') . "{$p['title']} — " . ($lang === 'bn' ? 'ewta banano jai?' : 'want to make something with it?'), $p, $chips);
+                $add('cart_complement', ($lang === 'bn' ? 'আপনার কার্টে ' : 'You have ') . "{$p['title']} — " . ($lang === 'bn' ? 'একটা বানানো যাই?' : 'want to make something with it?'), $p, $chips);
             }
         }
 
@@ -319,9 +319,9 @@ class PikuFeedController extends Controller
             $hit = $this->searchProduct($kw);
             if ($hit) {
                 $add('search_hook', ($lang === 'bn'
-                    ? "Apni \"{$kw}\" khuje pro ছিলেন! Ekhon stock e ache {$hit['title']} ✅"
+                    ? "আপনি \"{$kw}\" খুঁজে প্র ছিলেন! এখন স্টকে আছে {$hit['title']} ✅"
                     : "You were looking for \"{$kw}\" — found: {$hit['title']} ✅"), $hit, [
-                    ['label' => ($lang === 'bn' ? 'Dekhao' : 'Show it'), 'prefill' => "{$hit['title']} dekhao"]
+                    ['label' => ($lang === 'bn' ? 'দেখাও' : 'Show it'), 'prefill' => "{$hit['title']} dekhao"]
                 ], 90, 6000);
             }
         }
@@ -331,8 +331,8 @@ class PikuFeedController extends Controller
         if (! empty($reorderIds)) {
             $pid = (int) reset($reorderIds);
             if ($p = $this->productBrief($customerId, $pid, $lang)) {
-                $add('reorder', ($lang === 'bn' ? 'Age ei nite chilen — ' : 'Last time you loved ') . "{$p['title']} — abar nite chan? 🛒", $p, [
-                    ['label' => ($lang === 'bn' ? 'Reorder koro' : 'Reorder'), 'prefill' => "{$p['title']} cart e add koro"],
+                $add('reorder', ($lang === 'bn' ? 'আগে এটা নিতে চিলেন — ' : 'Last time you loved ') . "{$p['title']} — আবার নিতে চান? 🛒", $p, [
+                    ['label' => ($lang === 'bn' ? 'রিঅর্ডার করো' : 'Reorder'), 'prefill' => "{$p['title']} cart e add koro"],
                 ], 75, 90000);
             }
         }
@@ -343,7 +343,7 @@ class PikuFeedController extends Controller
             if ($subtotal >= 8000 && $subtotal < 10000) {
                 $remaining = (float) (10000 - $subtotal);
                 $msg = $lang === 'bn'
-                    ? 'Aro ¥' . number_format($remaining) . " add korle delivery FREE bhai! 💸"
+                    ? 'আরও ¥' . number_format($remaining) . " অ্যাড করলে ডেলিভারি ফ্রি ভাই! 💸"
                     : "Add ¥" . number_format($remaining) . " more and delivery is FREE! 💸";
                 $add('free_shipping', $msg, null, null, 80, 60000);
             }
@@ -355,11 +355,11 @@ class PikuFeedController extends Controller
         } elseif ($cart['stale_hours'] >= 6) {
             $stale = (int) $cart['stale_hours'];
             $add('cart_recovery', ($lang === 'bn'
-                ? "Apnar cart e item ache ({$stale} hours dhore!) — checkout hoy নাই! Ekhon kore niben? 💬"
+                ? "আপনার কার্টে আইটেম আছে ({$stale} ঘণ্টা ধরে!) — চেকআউট হয় নাই! এখন করে নিবেন? 💬"
                 : "Your cart has been waiting {$stale}h — let's finish checkout! 💬"));
         } elseif (! empty($cart['ids'])) {
             $add('cart_helper', ($lang === 'bn'
-                ? 'Choi sob item এখানে ওই বা ওটা cart e rakhkhei dilam! "Add all" bolun 💬'
+                ? 'চলুন সব আইটেম কার্টে রাখতে পারি! "Add all" বলুন 💬'
                 : 'Say "add all" and I will add all to your cart at once 💬'));
         }
 
@@ -371,10 +371,10 @@ class PikuFeedController extends Controller
             if ($p = $this->productBrief($customerId, (int) $pid, $lang)) {
                 $spotAdded++;
                 $chips = [
-                    ['label' => ($lang === 'bn' ? 'Recipe dao' : 'Recipe please'), 'prefill' => "{$p['title']} er recipe dao"],
-                    ['label' => ($lang === 'bn' ? 'Add koro' : 'Add to cart'), 'prefill' => "{$p['title']} cart e add koro"],
+                    ['label' => ($lang === 'bn' ? 'রেসিপি দাও' : 'Recipe please'), 'prefill' => "{$p['title']} er recipe dao"],
+                    ['label' => ($lang === 'bn' ? 'অ্যাড করো' : 'Add to cart'), 'prefill' => "{$p['title']} cart e add koro"],
                 ];
-                $add('spotlight', ($lang === 'bn' ? 'Piku মনে রাখল — ' : 'Piku picked just for you — ') . $p['text'] . ' (' . $p['price_line'] . ')', $p, $chips, 60, 45000);
+                $add('spotlight', ($lang === 'bn' ? 'পিকু মনে রাখল — ' : 'Piku picked just for you — ') . $p['text'] . ' (' . $p['price_line'] . ')', $p, $chips, 60, 45000);
             }
         }
 
@@ -389,10 +389,10 @@ class PikuFeedController extends Controller
                 if (count($out) >= $limit) break;
                 if ($p = $this->productBrief(null, (int) $pid, $lang)) {
                     $chips = [
-                        ['label' => ($lang === 'bn' ? 'Recipe dao' : 'Recipe please'), 'prefill' => "{$p['title']} er recipe dao"],
-                        ['label' => ($lang === 'bn' ? 'Add koro' : 'Add to cart'), 'prefill' => "{$p['title']} cart e add koro"],
+                        ['label' => ($lang === 'bn' ? 'রেসিপি দাও' : 'Recipe please'), 'prefill' => "{$p['title']} er recipe dao"],
+                        ['label' => ($lang === 'bn' ? 'অ্যাড করো' : 'Add to cart'), 'prefill' => "{$p['title']} cart e add koro"],
                     ];
-                    $add('spotlight', ($lang === 'bn' ? 'Ajker special — ' : "Today's pick — ") . $p['title'] . ' (' . $p['price_line'] . ')', $p, $chips, 50, 45000);
+                    $add('spotlight', ($lang === 'bn' ? 'আজকের স্পেশাল — ' : "Today's pick — ") . $p['title'] . ' (' . $p['price_line'] . ')', $p, $chips, 50, 45000);
                 }
             }
         }
@@ -410,7 +410,7 @@ class PikuFeedController extends Controller
                     $season = (string) ($triggers['season'] ?? '');
                     if ($season !== '' && in_array($season, ['ramadan', 'eid', 'winter', 'summer', 'rainy'], true)) {
                         $seasonLines = [
-                            'bn' => "{$season} season er special ready — ki lagbe bolen! 🍽️",
+                            'bn' => "{$season} সিজনের স্পেশাল রেডি — কী লাগবে বলুন! 🍽️",
                             'hi' => "{$season} सीज़न का स्पेशल तैयार है — बताइए क्या चाहिए! 🍽️",
                             'en' => ucfirst($season) . " season specials are ready — tell me what you need! 🍽️",
                         ];
@@ -510,11 +510,11 @@ class PikuFeedController extends Controller
     {
         $tips = [
             'bn' => [
-                'Aj ker fresh stock eshe geche — dekhe nin! 🥬',
-                'Recipe lagle bolo, ami step-by-step diye debo 🍳',
-                'Cart e add korle ami ingredients o miley debo ✅',
-                'Kon ta banate chan ajke? Bolo, help korbo 😊',
-                'Free delivery pete ¥10,000 porjonto pohonchan — ektu baki! 💸',
+                'আজকের ফ্রেশ স্টক এসে গেছে — দেখে নিন! 🥬',
+                'রেসিপি লাগলে বলুন, আমি স্টেপ-বাই-স্টেপ দিয়ে দেবো 🍳',
+                'কার্টে অ্যাড করলে আমি উপকরণও মিলিয়ে দেবো ✅',
+                'আজকে কোনটা বানাতে চান? বলুন, হেল্প করবো 😊',
+                'ফ্রি ডেলিভারি পেতে ¥10,000 পর্যন্ত পৌঁছান — একটু বাকি! 💸',
             ],
             'hi' => [
                 'आज ताज़ा स्टॉक आ गया है — देख लीजिए! 🥬',

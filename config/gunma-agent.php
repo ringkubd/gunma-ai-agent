@@ -283,6 +283,9 @@ return [
     */
     'session_ttl'        => (int) env('GUNMA_SESSION_TTL', 86400),    // 24h Redis TTL
     'max_history'        => (int) env('GUNMA_MAX_HISTORY', 20),       // Messages in context window
+    // Window (hours) where a just-ended session is handed back to the same
+    // visitor instead of creating a fresh "active" one on refresh.
+    'session_end_grace_hours' => (int) env('GUNMA_SESSION_END_GRACE_HOURS', 6),
 
     /*
     |--------------------------------------------------------------------------

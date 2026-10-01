@@ -61,14 +61,38 @@ class ChatController extends Controller
         }
 
         if (! $session) {
-            $session = ChatSession::create([
-                'visitor_id'    => $validated['visitor_id'],
-                'customer_id'   => $customerId,
-                'customer_name' => $customerName,
-                'channel'       => $validated['channel'] ?? 'web',
-                'status'        => 'active',
-                'metadata'      => $validated['metadata'] ?? null,
-            ]);
+            // No active session. If the visitor's MOST RECENT session was just
+            // ended (by a human or the system) and nothing new happened after
+            // it, hand it back instead of minting a fresh "active" one — else
+            // an ended chat looks active again on every page refresh.
+            $graceHours = (int) config('gunma-agent.session_end_grace_hours', 6);
+            $recentEnded = null;
+            if ($graceHours > 0) {
+                try {
+                    $q = ChatSession::where('channel', $validated['channel'] ?? 'web')
+                        ->where('status', 'ended')
+                        ->where('updated_at', '>=', now()->subHours($graceHours));
+                    $q = $customerId
+                        ? $q->where(function ($w) use ($customerId, $validated) {
+                            $w->where('customer_id', $customerId)->orWhere('visitor_id', $validated['visitor_id']);
+                        })
+                        : $q->where('visitor_id', $validated['visitor_id']);
+                    $recentEnded = $q->latest('updated_at')->first();
+                } catch (\Throwable) { /* ignore */ }
+            }
+
+            if ($recentEnded) {
+                $session = $recentEnded;
+            } else {
+                $session = ChatSession::create([
+                    'visitor_id'    => $validated['visitor_id'],
+                    'customer_id'   => $customerId,
+                    'customer_name' => $customerName,
+                    'channel'       => $validated['channel'] ?? 'web',
+                    'status'        => 'active',
+                    'metadata'      => $validated['metadata'] ?? null,
+                ]);
+            }
         } else        if ($customerId && ! $session->customer_id) {
             // Upgrade anonymous session to authenticated
             $session->update([

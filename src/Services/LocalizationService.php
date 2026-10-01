@@ -15,14 +15,21 @@ namespace Anwar\GunmaAgent\Services;
 class LocalizationService
 {
     /**
+     * @param  string|null  $explicit  Customer-chosen language (highest priority,
+     *                                 e.g. the widget's X-Chat-Lang header).
      * @return array{code:string,name:string,source:string,script:?string,rtl:bool}
      */
-    public function resolve(?object $customer = null, ?string $acceptLanguage = null): array
+    public function resolve(?object $customer = null, ?string $acceptLanguage = null, ?string $explicit = null): array
     {
         $map = (array) config('gunma-agent.localization.language_names', []);
         $default = (string) config('gunma-agent.localization.default_language', 'bn');
 
         $candidates = [];
+
+        // 0) Explicit customer choice always wins.
+        if ($explicit !== null && trim($explicit) !== '') {
+            $candidates[] = ['code' => trim($explicit), 'source' => 'explicit'];
+        }
 
         if ($customer) {
             if (!empty($customer->native_language)) {

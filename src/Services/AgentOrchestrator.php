@@ -797,10 +797,12 @@ TXT;
             }
         }
 
-        // Response language: profile → country → Accept-Language → default.
+        // Response language: explicit customer choice → profile → country →
+        // Accept-Language → default.
         try {
             $accept = request()?->header('Accept-Language');
-            $locale = app(\Anwar\GunmaAgent\Services\LocalizationService::class)->resolve($customer, $accept);
+            $explicitLang = request()?->header('X-Chat-Lang') ?: request()?->input('lang');
+            $locale = app(\Anwar\GunmaAgent\Services\LocalizationService::class)->resolve($customer, $accept, $explicitLang ?: null);
             $ctx['language'] = $locale['name'];
             $ctx['language_code'] = $locale['code'];
             $ctx['language_script'] = $locale['script'] ?? null;

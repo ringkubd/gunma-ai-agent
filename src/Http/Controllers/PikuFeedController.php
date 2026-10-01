@@ -550,9 +550,13 @@ class PikuFeedController extends Controller
 
     private function resolveLang(Request $request, ?int $customerId = null): string
     {
-        $requested = strtolower((string) $request->query('lang', ''));
-        if (in_array($requested, self::LANGS, true)) {
-            return $requested;
+        // Explicit customer choice (widget language selector): query ?lang or
+        // the X-Chat-Lang header. Accept any sane 2-letter language code so the
+        // LLM composer can answer in it (pre-composed pools still cover bn/hi/en).
+        $explicit = strtolower(trim((string) ($request->query('lang') ?: $request->header('X-Chat-Lang', ''))));
+        $explicit = explode('-', $explicit)[0];
+        if ($explicit !== '' && preg_match('/^[a-z]{2}$/', $explicit)) {
+            return $explicit;
         }
 
         // Registered customer's stored language

@@ -33,7 +33,9 @@ class ChatController extends Controller
             'customer_name'  => 'nullable|string|max:255',
             'channel'        => 'nullable|in:web,admin,whatsapp',
             'metadata'       => 'nullable|array',
+            'force_new'      => 'nullable|boolean',
         ]);
+        $forceNew = $request->boolean('force_new');
 
         // If the request is authenticated, use the real customer identity
         $customerId   = auth()->id();
@@ -48,8 +50,12 @@ class ChatController extends Controller
                 ?? null;
         }
 
-        // Find existing active session for this visitor (or customer)
+        // Find existing active session for this visitor (or customer).
+        // force_new (customer tapped "Start new chat") always mints a fresh one.
         $sessionQuery = ChatSession::where('channel', $validated['channel'] ?? 'web')->active();
+        if ($forceNew) {
+            $sessionQuery->whereRaw('1 = 0');
+        }
 
         if ($customerId) {
             // Authenticated: match on customer_id first, then visitor_id as fallback
@@ -67,7 +73,7 @@ class ChatController extends Controller
             // an ended chat looks active again on every page refresh.
             $graceHours = (int) config('gunma-agent.session_end_grace_hours', 6);
             $recentEnded = null;
-            if ($graceHours > 0) {
+            if (! $forceNew && $graceHours > 0) {
                 try {
                     $q = ChatSession::where('channel', $validated['channel'] ?? 'web')
                         ->where('status', 'ended')
